@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v, e.g. 1.2.3"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: |
+          swift build
+          swift run MrMcLeanTests
+
+      - name: Package
+        run: bash Scripts/make-app.sh "${{ steps.version.outputs.value }}" "${{ github.run_number }}"
+
+      - name: Create or update tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git tag "${{ steps.version.outputs.tag }}" || true
+          git push origin "${{ steps.version.outputs.tag }}" || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          NOTES="Unsigned build. First launch: right-click the app, choose Open, then confirm."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/MrMcLean-*.dmg dist/MrMcLean-*.zip --clobber
+          else
+            gh release create "$TAG" dist/MrMcLean-*.dmg dist/MrMcLean-*.zip \
+              --title "MrMcLean ${{ steps.version.outputs.value }}" \
+              --notes "$NOTES" \
+              --generate-notes
+          fi
