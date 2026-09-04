@@ -7,6 +7,7 @@ public enum Scanner {
     ) async -> ScanSnapshot {
         let categories = Catalog.all
         let disk = DiskInfo.current()
+        let access = FullDiskAccess.check()
         var scans: [CategoryScan] = []
 
         await withTaskGroup(of: CategoryScan.self) { group in
@@ -22,7 +23,7 @@ public enum Scanner {
         }
 
         scans.sort { $0.totalBytes > $1.totalBytes }
-        return ScanSnapshot(disk: disk, categories: scans, date: Date())
+        return ScanSnapshot(disk: disk, categories: scans, date: Date(), fullDiskAccess: access)
     }
 
     static func measure(_ category: StorageCategory) async -> CategoryScan {
@@ -37,18 +38,20 @@ public enum Scanner {
         case .toolCleanup:
             var total: Int64 = 0
             var entries: [SizedEntry] = []
+            var issues: ProbeIssues = []
             let detected = ToolCleaner.detect()
             for tool in ToolCleaner.tools {
                 guard detected[tool.id] != nil, let cache = tool.cacheDirectory else { continue }
                 let path = expandTilde(cache)
                 guard directoryExists(path) else { continue }
-                let bytes = await SizeProbe.total(path)
+                let (bytes, probeIssues) = await SizeProbe.total(path)
                 total += bytes
+                issues.formUnion(probeIssues)
                 entries.append(SizedEntry(path: path, bytes: bytes))
             }
             entries.sort { $0.bytes > $1.bytes }
             return CategoryScan(category: category, totalBytes: total,
-                                entries: entries, itemCount: entries.count)
+                                entries: entries, itemCount: entries.count, issues: issues)
 
         case .reviewOnly where category.id == "largeFiles":
             // Deferred: run on explicit request only.
@@ -57,23 +60,26 @@ public enum Scanner {
         default:
             var total: Int64 = 0
             var entries: [SizedEntry] = []
+            var issues: ProbeIssues = []
             for probe in category.probes {
                 switch probe {
                 case .breakdown(let directory):
-                    let (subtotal, children) = await SizeProbe.breakdown(directory)
+                    let (subtotal, children, probeIssues) = await SizeProbe.breakdown(directory)
                     total += subtotal
                     entries.append(contentsOf: children)
+                    issues.formUnion(probeIssues)
                 case .glob(let pattern):
                     for match in globMatches(pattern) {
-                        let bytes = await SizeProbe.total(match)
+                        let (bytes, probeIssues) = await SizeProbe.total(match)
                         total += bytes
+                        issues.formUnion(probeIssues)
                         if bytes > 0 { entries.append(SizedEntry(path: match, bytes: bytes)) }
                     }
                 }
             }
             entries.sort { $0.bytes > $1.bytes }
             return CategoryScan(category: category, totalBytes: total,
-                                entries: entries, itemCount: entries.count)
+                                entries: entries, itemCount: entries.count, issues: issues)
         }
     }
 }

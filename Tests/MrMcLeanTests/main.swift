@@ -149,6 +149,54 @@ h.expectEqual(Format.percent(1.5), "100%", "percent clamps high")
 h.expectEqual(Format.percent(-0.2), "0%", "percent clamps low")
 h.expectEqual(Format.percent(0.256, digits: 1), "25.6%", "percent rounds")
 
+// MARK: Full Disk Access
+
+h.group("Access")
+
+h.expectEqual(ProbeIssues.classify(stderr: "", timedOut: false), [], "a clean du run has no issues")
+h.expect(
+    ProbeIssues.classify(stderr: "du: /x: Operation not permitted", timedOut: false)
+        .contains(.permissionDenied),
+    "EPERM stderr is flagged as permissionDenied"
+)
+h.expect(
+    ProbeIssues.classify(stderr: "du: a/b: Permission denied", timedOut: false)
+        .contains(.permissionDenied),
+    "EACCES stderr is flagged as permissionDenied"
+)
+h.expect(
+    ProbeIssues.classify(stderr: "", timedOut: true).contains(.timedOut),
+    "a killed du run is flagged as timedOut"
+)
+h.expect(URL(string: FullDiskAccess.settingsURLString) != nil, "the settings deep link parses")
+h.expect(
+    [.granted, .denied, .unknown].contains(FullDiskAccess.check()),
+    "FullDiskAccess.check returns a known status without crashing"
+)
+
+do {
+    let disk = DiskInfo(totalBytes: 100, rawAvailable: 10, importantAvailable: 20)
+    let clean = ScanSnapshot(disk: disk, categories: [], date: Date(), fullDiskAccess: .granted)
+    h.expect(clean.sizesUnderReported == false, "granted access with no issues is not under-reported")
+
+    let denied = ScanSnapshot(disk: disk, categories: [], date: Date(), fullDiskAccess: .denied)
+    h.expect(denied.sizesUnderReported, "denied access is under-reported")
+
+    let stalled = CategoryScan(category: Catalog.userCaches, totalBytes: 0,
+                               entries: [], itemCount: 0, issues: .timedOut)
+    let partial = ScanSnapshot(disk: disk, categories: [stalled], date: Date(), fullDiskAccess: .granted)
+    h.expect(partial.scanIssues.contains(.timedOut), "aggregate scanIssues includes a category's issues")
+    h.expect(partial.sizesUnderReported, "a timed-out category makes the snapshot under-reported")
+
+    let adminOnly = CategoryScan(category: Catalog.systemCaches, totalBytes: 0,
+                                 entries: [], itemCount: 0, issues: .permissionDenied)
+    let adminSnapshot = ScanSnapshot(disk: disk, categories: [adminOnly], date: Date(), fullDiskAccess: .granted)
+    h.expect(
+        adminSnapshot.sizesUnderReported == false,
+        "a denied admin-only category does not count as under-reported (root paths need the admin step)"
+    )
+}
+
 // MARK: Optional live scan against the real disk (MRMCLEAN_LIVE=1)
 
 if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {
@@ -164,8 +212,16 @@ if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {
     semaphore.wait()
     if let snapshot {
         h.expect(snapshot.disk.totalBytes > 0, "disk capacity is reported")
+        print("  Full Disk Access: \(snapshot.fullDiskAccess.rawValue)")
         for scan in snapshot.categories {
-            print("  \(scan.category.name): \(Format.bytes(scan.totalBytes))")
+            var notes: [String] = []
+            if scan.issues.contains(.permissionDenied) { notes.append("denied") }
+            if scan.issues.contains(.timedOut) { notes.append("timed-out") }
+            let flags = notes.isEmpty ? "" : "  [\(notes.joined(separator: ", "))]"
+            print("  \(scan.category.name): \(Format.bytes(scan.totalBytes))\(flags)")
+        }
+        if snapshot.sizesUnderReported {
+            print("  -> sizes are under-reported")
         }
     } else {
         h.expect(false, "live scan returned a snapshot")

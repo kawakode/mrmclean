@@ -29,6 +29,16 @@ On first launch, right-click the app and choose Open, then confirm.
 
 MrMcLean runs as a menu bar item. Enable a Dock icon in Settings if you prefer.
 
+## Full Disk Access
+
+macOS hides many folders (Mail, Messages, Safari, protected caches) from apps
+that do not hold Full Disk Access. There is no prompt for it: grant it by hand in
+System Settings › Privacy & Security › Full Disk Access, add MrMcLean, then
+rescan. Without it, category sizes read lower than the real usage; MrMcLean
+detects the missing grant and shows a warning on the Overview with a button that
+opens the right pane. Root-owned system caches always need the separate
+administrator step regardless of Full Disk Access.
+
 ## Build from source
 
 Requires the Swift 6 toolchain. The Command Line Tools are enough; full Xcode is

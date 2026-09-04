@@ -9,6 +9,9 @@ struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if let snapshot = store.snapshot {
+                    if snapshot.sizesUnderReported {
+                        accessWarningCard(snapshot)
+                    }
                     diskCard(snapshot)
                     categoriesCard(snapshot)
                     systemDataCard
@@ -113,6 +116,59 @@ struct OverviewView: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 2)
+    }
+
+    private func accessWarningCard(_ snapshot: ScanSnapshot) -> some View {
+        let denied = snapshot.fullDiskAccess == .denied
+        let issues = snapshot.scanIssues
+        let canGrant = denied || issues.contains(.permissionDenied)
+        return Card {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(denied ? "Full Disk Access is off" : "Some folders were skipped",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                Text(accessWarningText(denied: denied, issues: issues))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if canGrant {
+                        Button("Open Full Disk Access Settings") {
+                            if let url = URL(string: FullDiskAccess.settingsURLString) {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    Button("Rescan") { Task { await store.scan() } }
+                        .disabled(store.scanning)
+                }
+            }
+        }
+    }
+
+    private func accessWarningText(denied: Bool, issues: ProbeIssues) -> String {
+        var parts: [String] = []
+        if denied {
+            parts.append("""
+            MrMcLean can't read protected folders such as Mail, Messages, Safari and \
+            the system caches, so the sizes below are lower than the real usage. Grant \
+            Full Disk Access, then rescan.
+            """)
+        } else if issues.contains(.permissionDenied) {
+            parts.append("""
+            Some folders could not be read and were left out of the totals. Granting \
+            Full Disk Access and rescanning gives an accurate picture.
+            """)
+        }
+        if issues.contains(.timedOut) {
+            parts.append("""
+            A folder was too large to finish measuring in the time allowed, so its \
+            category may read low. Rescan to try again.
+            """)
+        }
+        return parts.joined(separator: " ")
     }
 
     private var systemDataCard: some View {

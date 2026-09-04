@@ -32,5 +32,13 @@
     <string>MrMcLean runs one authenticated shell script to remove the system caches you choose.</string>
     <key>NSSystemAdministrationUsageDescription</key>
     <string>Required to remove root-owned system caches, logs, and Time Machine local snapshots.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>MrMcLean measures how much space the files here use so it can report storage usage.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>MrMcLean measures how much space the files here use so it can report storage usage.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>MrMcLean measures how much space the files here use so it can report storage usage.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>MrMcLean scans connected volumes to report how their space is used.</string>
 </dict>
 </plist>

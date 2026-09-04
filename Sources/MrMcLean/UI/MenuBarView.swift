@@ -34,6 +34,17 @@ struct MenuBarView: View {
                             .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
+                if snapshot.sizesUnderReported {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(snapshot.fullDiskAccess == .denied
+                             ? "Full Disk Access off — sizes are low"
+                             : "Some folders skipped — sizes are low")
+                        .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
             } else {
                 Text("No scan yet").font(.callout).foregroundStyle(.secondary)
             }
