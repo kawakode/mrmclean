@@ -14,9 +14,15 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          swift --version
 
       - name: Resolve version
         id: version
