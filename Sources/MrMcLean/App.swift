@@ -36,10 +36,14 @@ struct MrMcLeanApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = AppConfig.load()
-        NSApp.setActivationPolicy(config.showDockIcon ? .regular : .accessory)
+        // The onboarding gate needs the window up front (and a Dock icon so the
+        // app is easy to return to from System Settings), whatever the saved
+        // launch preference says.
+        let needsAccess = FullDiskAccess.check() == .denied
+        NSApp.setActivationPolicy(config.showDockIcon || needsAccess ? .regular : .accessory)
         DispatchQueue.main.async {
             for window in NSApp.windows where window.canBecomeMain && !(window is NSPanel) {
-                if config.launchMinimized {
+                if config.launchMinimized && !needsAccess {
                     window.close()
                 } else {
                     window.makeKeyAndOrderFront(nil)

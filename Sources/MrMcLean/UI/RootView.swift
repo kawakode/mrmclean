@@ -5,8 +5,43 @@ struct RootView: View {
     @Environment(Store.self) private var store
     @Environment(\.openWindow) private var openWindow
     @State private var selection: String? = "overview"
+    @State private var showFullCleanSetup = false
 
     var body: some View {
+        ZStack {
+            mainInterface
+                .disabled(store.showAccessGate || store.fullCleanReport != nil)
+
+            if store.showAccessGate {
+                FullDiskAccessGate()
+                    .transition(.opacity)
+                    .zIndex(2)
+            }
+
+            if store.fullCleanReport != nil {
+                FullCleanView()
+                    .transition(.opacity)
+                    .zIndex(3)
+            }
+        }
+        .animation(.smooth(duration: 0.35), value: store.showAccessGate)
+        .animation(.smooth(duration: 0.35), value: store.fullCleanReport == nil)
+        .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
+            openWindow(id: "main")
+        }
+        .onChange(of: store.pendingFullCleanRequest) { _, pending in
+            if pending {
+                store.pendingFullCleanRequest = false
+                if store.fullCleanReport == nil { showFullCleanSetup = true }
+            }
+        }
+        .sheet(isPresented: $showFullCleanSetup) {
+            FullCleanSetupSheet()
+                .environment(store)
+        }
+    }
+
+    private var mainInterface: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 NavigationLink(value: "overview") {
@@ -25,9 +60,6 @@ struct RootView: View {
         } detail: {
             detail
                 .toolbar { toolbar }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
-            openWindow(id: "main")
         }
         .overlay(alignment: .bottom) { bannerView }
     }
@@ -68,6 +100,14 @@ struct RootView: View {
                       systemImage: store.scanning ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
             }
             .disabled(store.scanning)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showFullCleanSetup = true
+            } label: {
+                Label("Full Clean", systemImage: "sparkles")
+            }
+            .disabled(store.scanning || store.fullCleanReport != nil)
         }
     }
 

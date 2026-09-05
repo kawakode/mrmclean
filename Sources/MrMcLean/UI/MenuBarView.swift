@@ -65,6 +65,15 @@ struct MenuBarView: View {
                 }
                 .disabled(store.scanning || (store.snapshot?.quickCleanBytes ?? 0) == 0)
             }
+            Button {
+                openWindow(id: "main")
+                MainWindow.show()
+                store.requestFullClean()
+            } label: {
+                Label("Full Clean…", systemImage: "sparkles").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(store.scanning || store.fullCleanReport != nil)
             HStack {
                 Button("Open") {
                     openWindow(id: "main")

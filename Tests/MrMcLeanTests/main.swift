@@ -197,6 +197,69 @@ do {
     )
 }
 
+// MARK: Full clean
+
+h.group("FullClean")
+
+do {
+    let steps = FullClean.plan(includeSystem: false)
+    h.expectEqual(steps.map(\.id), ["userCaches", "appLogs", "developer", "trash"],
+                  "safe plan is caches, logs, developer, trash in order")
+}
+do {
+    let steps = FullClean.plan(includeSystem: true, includeSnapshots: true, devToolIDs: ["brew", "npm"])
+    h.expectEqual(steps.first?.id ?? "", "userCaches", "plan starts with user caches")
+    h.expectEqual(steps.last?.id ?? "", "system", "system step is last when included")
+    h.expect(steps.contains { $0.id == "devTools" }, "dev tools step present when ids are given")
+    if case .system(let snapshots)? = steps.last?.work {
+        h.expect(snapshots, "system step carries the includeSnapshots flag")
+    } else {
+        h.expect(false, "last step is a system step")
+    }
+}
+do {
+    let steps = FullClean.plan(includeSystem: false, devToolIDs: [])
+    h.expect(!steps.contains { $0.id == "devTools" }, "no dev tools step without ids")
+    h.expect(!steps.contains { $0.id == "system" }, "no system step when not included")
+}
+do {
+    let disk = DiskInfo(totalBytes: 1000, rawAvailable: 100, importantAvailable: 100)
+    var report = FullCleanReport(
+        phases: [
+            FullCleanPhase(id: "a", title: "A", symbol: "x"),
+            FullCleanPhase(id: "b", title: "B", symbol: "y"),
+        ],
+        startedAt: Date(timeIntervalSinceNow: -12),
+        diskBefore: disk
+    )
+    h.expect(report.progress == 0, "fresh report has zero progress")
+    h.expect(!report.isComplete, "fresh report is not complete")
+
+    report.update("a") { $0.status = .done; $0.freedBytes = 500; $0.removedCount = 3 }
+    report.update("b") { $0.status = .failed; $0.skippedCount = 1; $0.note = "nope" }
+    h.expectEqual(report.totalFreedBytes, 500, "report sums freed bytes")
+    h.expectEqual(report.totalRemoved, 3, "report sums removed count")
+    h.expectEqual(report.totalSkipped, 1, "report sums skipped count")
+    h.expect(report.anyFailed, "a failed phase is reflected")
+    h.expect(report.progress == 1.0, "both phases resolved means progress is complete")
+
+    report.diskAfter = DiskInfo(totalBytes: 1000, rawAvailable: 400, importantAvailable: 400)
+    h.expectEqual(report.diskFreedBytes ?? -1, 300, "disk freed is measured from the volume delta")
+    h.expectEqual(report.headlineFreedBytes, 300, "headline prefers the measured volume delta")
+
+    report.finishedAt = Date()
+    h.expect(report.isComplete, "a finished report is complete")
+}
+do {
+    // Falls back to the per-phase sum when the volume shows no gain.
+    let disk = DiskInfo(totalBytes: 1000, rawAvailable: 100, importantAvailable: 100)
+    var report = FullCleanReport(phases: [FullCleanPhase(id: "a", title: "A", symbol: "x")],
+                                 diskBefore: disk)
+    report.update("a") { $0.status = .done; $0.freedBytes = 250 }
+    report.diskAfter = disk
+    h.expectEqual(report.headlineFreedBytes, 250, "headline falls back to the phase sum with no volume gain")
+}
+
 // MARK: Optional live scan against the real disk (MRMCLEAN_LIVE=1)
 
 if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {

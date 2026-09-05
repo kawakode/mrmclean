@@ -11,9 +11,23 @@ third-party dependencies, targets macOS 14 Sonoma and later.
 - Cleans the safe parts of each category. User-level items go straight through an
   allowlist. Root-owned system caches and snapshot thinning run through one
   administrator password prompt, with the exact shell script shown first.
+- **Full Clean**: one button clears every safe category in a single pass — user
+  caches, app logs, Xcode and developer files, the Trash, and (opt-in) the
+  enabled dev-tool caches and the root-owned system step. It plays a progress
+  animation while it works and ends on a report: space freed, items removed,
+  time taken, and disk free space before and after.
 - Alerts: enable a per-category threshold as a share of total disk size. When a
   category crosses it, MrMcLean posts a notification. Cooldown and re-alert growth
   are configurable.
+
+## First launch
+
+MrMcLean needs Full Disk Access to do anything useful. On launch, if the grant is
+missing it opens an onboarding screen that explains the steps, opens the right
+System Settings pane, and re-checks on a timer so it closes itself once access is
+on — no relaunch needed in most cases, with a Quit & Reopen button for when macOS
+wants one. "Continue with limited access" starts the app anyway with reduced,
+lower-than-real size figures.
 
 ## About "System Data"
 
@@ -32,11 +46,12 @@ MrMcLean runs as a menu bar item. Enable a Dock icon in Settings if you prefer.
 ## Full Disk Access
 
 macOS hides many folders (Mail, Messages, Safari, protected caches) from apps
-that do not hold Full Disk Access. There is no prompt for it: grant it by hand in
-System Settings › Privacy & Security › Full Disk Access, add MrMcLean, then
-rescan. Without it, category sizes read lower than the real usage; MrMcLean
-detects the missing grant and shows a warning on the Overview with a button that
-opens the right pane. Root-owned system caches always need the separate
+that do not hold Full Disk Access. There is no system prompt for it, so MrMcLean
+shows its own onboarding screen on first launch (see above): grant it in
+System Settings › Privacy & Security › Full Disk Access, add MrMcLean, and the
+screen closes itself once the grant lands. Without it, category sizes read lower
+than the real usage; MrMcLean also keeps a warning on the Overview with a button
+that opens the right pane. Root-owned system caches always need the separate
 administrator step regardless of Full Disk Access.
 
 ## Build from source

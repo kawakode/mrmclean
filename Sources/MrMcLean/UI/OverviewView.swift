@@ -13,6 +13,7 @@ struct OverviewView: View {
                         accessWarningCard(snapshot)
                     }
                     diskCard(snapshot)
+                    fullCleanCard(snapshot)
                     categoriesCard(snapshot)
                     systemDataCard
                 } else {
@@ -57,6 +58,28 @@ struct OverviewView: View {
                     }
                 }
                 Spacer()
+            }
+        }
+    }
+
+    private func fullCleanCard(_ snapshot: ScanSnapshot) -> some View {
+        Card {
+            HStack(spacing: 16) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Full Clean").font(.headline)
+                    Text("Caches, logs, developer files and the Trash in one animated pass, with a report at the end.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button("Full Clean…") { store.requestFullClean() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(store.scanning || store.fullCleanReport != nil)
             }
         }
     }
