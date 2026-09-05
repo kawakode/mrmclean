@@ -173,6 +173,12 @@ h.expect(
     [.granted, .denied, .unknown].contains(FullDiskAccess.check()),
     "FullDiskAccess.check returns a known status without crashing"
 )
+h.expect(
+    FullDiskAccessStatus(rawValue: "denied") == .denied
+        && FullDiskAccessStatus(rawValue: "granted") == .granted
+        && FullDiskAccessStatus(rawValue: "nope") == nil,
+    "FullDiskAccessStatus round-trips its raw value (used by the MRMCLEAN_FORCE_FDA test hook)"
+)
 
 do {
     let disk = DiskInfo(totalBytes: 100, rawAvailable: 10, importantAvailable: 20)

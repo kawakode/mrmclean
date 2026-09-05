@@ -54,7 +54,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          NOTES="Unsigned build. First launch: right-click the app, choose Open, then confirm."
+          NOTES=$'Not notarized — macOS Gatekeeper blocks the first launch (a double-click may do nothing).\n\nMove MrMcLean.app to /Applications, then run:\n\n```\nxattr -dr com.apple.quarantine /Applications/MrMcLean.app\nopen /Applications/MrMcLean.app\n```\n\nOr double-click it, then System Settings > Privacy & Security > Open Anyway.'
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/MrMcLean-*.dmg dist/MrMcLean-*.zip --clobber
           else

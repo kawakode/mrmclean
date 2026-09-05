@@ -82,7 +82,10 @@ struct MenuBarView: View {
                 Spacer()
                 SettingsLink { Text("Settings") }
                 Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
+                Button("Quit") {
+                    AppDelegate.userWantsQuit = true
+                    NSApp.terminate(nil)
+                }
             }
             .font(.callout)
         }

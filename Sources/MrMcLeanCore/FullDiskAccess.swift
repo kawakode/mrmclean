@@ -33,6 +33,12 @@ public enum FullDiskAccess {
     }
 
     public static func check() -> FullDiskAccessStatus {
+        // Test hook: exercise the onboarding gate without touching real TCC state.
+        // `MRMCLEAN_FORCE_FDA=granted|denied|unknown`.
+        if let forced = ProcessInfo.processInfo.environment["MRMCLEAN_FORCE_FDA"],
+           let status = FullDiskAccessStatus(rawValue: forced) {
+            return status
+        }
         var sawProtectedFile = false
         for path in probePaths {
             guard FileManager.default.fileExists(atPath: path) else { continue }

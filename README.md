@@ -38,8 +38,20 @@ by macOS and freed automatically under disk pressure, or needs a restart.
 
 ## Install
 
-Download the DMG from the [Releases](../../releases) page. The build is unsigned.
-On first launch, right-click the app and choose Open, then confirm.
+Download the DMG or zip from the [Releases](../../releases) page and move
+`MrMcLean.app` to `/Applications`.
+
+The build is **not notarized**, so macOS Gatekeeper blocks it on first launch —
+on recent macOS a double-click does nothing at all. Clear the quarantine flag,
+then open it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MrMcLean.app
+open /Applications/MrMcLean.app
+```
+
+(Alternatively: double-click it, then open System Settings › Privacy & Security
+and click **Open Anyway**.)
 
 MrMcLean runs as a menu bar item. Enable a Dock icon in Settings if you prefer.
 
