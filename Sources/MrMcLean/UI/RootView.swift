@@ -6,6 +6,7 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var selection: String? = "overview"
     @State private var showFullCleanSetup = false
+    @State private var bannerDetails: Store.Banner?
 
     var body: some View {
         ZStack {
@@ -29,11 +30,33 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
             openWindow(id: "main")
         }
-        .onChange(of: store.pendingFullCleanRequest) { _, pending in
+        .onChange(of: store.pendingFullCleanRequest, initial: true) { _, pending in
             if pending {
                 store.pendingFullCleanRequest = false
-                if store.fullCleanReport == nil { showFullCleanSetup = true }
+                if store.canStartOperation { showFullCleanSetup = true }
             }
+        }
+        .onChange(of: store.showAccessGate) { _, visible in
+            if !visible { Task { await store.scan() } }
+        }
+        .sheet(item: Binding(get: { store.cleanupRequest }, set: { store.cleanupRequest = $0 })) { request in
+            CleanupReviewSheet(request: request).environment(store)
+        }
+        .sheet(item: $bannerDetails) { banner in
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Cleanup details").font(.headline)
+                ScrollView {
+                    Text(banner.text).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 280)
+                HStack {
+                    Spacer()
+                    Button("Done") { bannerDetails = nil }.keyboardShortcut(.cancelAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 520)
         }
         .sheet(isPresented: $showFullCleanSetup) {
             FullCleanSetupSheet()
@@ -68,10 +91,12 @@ struct RootView: View {
     private func sidebarRow(_ category: StorageCategory) -> some View {
         HStack {
             Label(category.name, systemImage: category.symbol)
+                .lineLimit(1).truncationMode(.tail)
+                .help(category.name)
             Spacer()
             if let scan = store.snapshot?.category(category.id), scan.totalBytes > 0 {
                 Text(Format.bytes(scan.totalBytes))
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary).fixedSize()
             }
         }
     }
@@ -81,7 +106,7 @@ struct RootView: View {
         switch selection {
         case .some(let id) where id != "overview":
             if let category = Catalog.category(id) {
-                CategoryDetailView(category: category)
+                CategoryDetailView(category: category).id(category.id)
             } else {
                 OverviewView(selection: $selection)
             }
@@ -99,7 +124,7 @@ struct RootView: View {
                 Label(store.scanning ? "Scanning" : "Scan",
                       systemImage: store.scanning ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
             }
-            .disabled(store.scanning)
+            .disabled(!store.canStartOperation)
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
@@ -107,7 +132,7 @@ struct RootView: View {
             } label: {
                 Label("Full Clean", systemImage: "sparkles")
             }
-            .disabled(store.scanning || store.fullCleanReport != nil)
+            .disabled(!store.canStartOperation || store.snapshot == nil)
         }
     }
 
@@ -116,6 +141,11 @@ struct RootView: View {
             if store.scanning {
                 ProgressView(value: store.progress).progressViewStyle(.linear)
                 Text(store.statusText).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            } else if store.isBusy {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(store.statusText).font(.caption2).lineLimit(1)
+                }
             } else if let date = store.snapshot?.date {
                 Text("Scanned \(Format.relativeDate(date))")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -129,17 +159,32 @@ struct RootView: View {
     @ViewBuilder
     private var bannerView: some View {
         if let banner = store.banner {
-            Text(banner.text)
+            HStack(alignment: .top, spacing: 10) {
+                Text(banner.text).lineLimit(3)
+                if banner.kind == .failure {
+                    Button("Details") { bannerDetails = banner }
+                        .buttonStyle(.plain)
+                        .underline()
+                }
+                Button { store.banner = nil } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss message")
+            }
                 .font(.callout)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(color(for: banner.kind), in: Capsule())
+                .background(color(for: banner.kind), in: RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(.white)
+                .frame(maxWidth: 580)
+                .padding(.horizontal, 20)
                 .padding(.bottom, 18)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .task(id: banner.id) {
-                    try? await Task.sleep(for: .seconds(4))
-                    store.banner = nil
+                    guard banner.kind != .failure else { return }
+                    do { try await Task.sleep(for: .seconds(7)) } catch { return }
+                    if store.banner?.id == banner.id { store.banner = nil }
                 }
         }
     }

@@ -16,9 +16,11 @@ final class Store {
     var config: AppConfig {
         didSet {
             guard ready, config != oldValue else { return }
-            config.save()
-            applyActivationPolicy()
-            AlertMonitor.shared.reschedule()
+            if persistConfig { config.save() }
+            if config.showDockIcon != oldValue.showDockIcon { applyActivationPolicy() }
+            if config.scanIntervalHours != oldValue.scanIntervalHours {
+                AlertMonitor.shared.reschedule()
+            }
         }
     }
     var snapshot: ScanSnapshot?
@@ -26,7 +28,12 @@ final class Store {
     var progress: Double = 0
     var statusText = ""
     var banner: Banner?
-    var largeFiles: [SizedEntry] = []
+    var largeFileScan: LargeFileScan?
+    var largeFiles: [SizedEntry] { largeFileScan?.entries ?? [] }
+    var cleaning = false
+    var cleanupRequest: CleanupRequest?
+    var isBusy: Bool { scanning || scanningLargeFiles || cleaning || fullCleanRunning }
+    var canStartOperation: Bool { !isBusy && !showAccessGate && fullCleanReport == nil }
     var scanningLargeFiles = false
 
     /// Full Disk Access state, refreshed while the onboarding gate is on screen.
@@ -44,6 +51,9 @@ final class Store {
     let detectedTools: [String: String]
 
     @ObservationIgnored private var ready = false
+    @ObservationIgnored private var started = false
+    @ObservationIgnored private let persistConfig: Bool
+    @ObservationIgnored private let diskOperationsEnabled: Bool
 
     /// True until the user grants access or explicitly continues without it.
     /// `.unknown` (no probe file to test) does not block.
@@ -51,21 +61,27 @@ final class Store {
         fullDiskAccess == .denied && !accessGateDismissed && fullCleanReport == nil
     }
 
-    init() {
-        config = AppConfig.load()
-        detectedTools = ToolCleaner.detect()
-        fullDiskAccess = FullDiskAccess.check()
+    init(config: AppConfig = AppConfig.load(), detectedTools: [String: String] = ToolCleaner.detect(),
+         fullDiskAccess: FullDiskAccessStatus = FullDiskAccess.check(), persistConfig: Bool = true,
+         diskOperationsEnabled: Bool = true) {
+        self.config = config
+        self.detectedTools = detectedTools
+        self.fullDiskAccess = fullDiskAccess
+        self.persistConfig = persistConfig
+        self.diskOperationsEnabled = diskOperationsEnabled
         ready = true
     }
 
     // MARK: Lifecycle
 
     func startup() async {
+        guard !started else { return }
+        started = true
         NotificationsController.shared.bootstrap()
         AlertMonitor.shared.bind(self)
         AlertMonitor.shared.reschedule()
         applyActivationPolicy()
-        if snapshot == nil { await scan() }
+        if snapshot == nil { Task { await scan() } }
     }
 
     func applyActivationPolicy() {
@@ -84,6 +100,7 @@ final class Store {
     func refreshAccess() -> Bool {
         let previous = fullDiskAccess
         fullDiskAccess = FullDiskAccess.check()
+        if fullDiskAccess != previous { applyActivationPolicy() }
         return previous != .granted && fullDiskAccess == .granted
     }
 
@@ -95,54 +112,78 @@ final class Store {
     // MARK: Scanning
 
     func scan() async {
-        guard !scanning else { return }
+        guard canStartOperation, diskOperationsEnabled else { return }
+        await refreshSnapshot()
+    }
+
+    private func refreshSnapshot() async {
         scanning = true
         progress = 0
         statusText = "Starting"
-        let result = await Scanner.run { [weak self] fraction, name in
+        var result = await Scanner.run { [weak self] fraction, name in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.scanning else { return }
                 self.progress = fraction
                 self.statusText = "Scanning \(name)"
             }
         }
+        if let largeFileScan { result.recordLargeFiles(largeFileScan) }
         snapshot = result
+        fullDiskAccess = result.fullDiskAccess
         scanning = false
+        progress = 1
+        applyActivationPolicy()
         statusText = ""
-        evaluateAlerts()
+        if !cleaning && !fullCleanRunning { evaluateAlerts() }
     }
 
     func scanLargeFiles() async {
-        guard !scanningLargeFiles else { return }
+        guard canStartOperation, diskOperationsEnabled else { return }
         scanningLargeFiles = true
-        largeFiles = await LargeFiles.scan()
+        statusText = "Finding large files…"
+        let result = await LargeFiles.scan()
+        largeFileScan = result
+        snapshot?.recordLargeFiles(result)
+        statusText = ""
         scanningLargeFiles = false
     }
 
     // MARK: Cleaning
 
-    func clean(categoryID: String, items: [SizedEntry]) async {
-        guard let category = Catalog.category(categoryID), !items.isEmpty else { return }
-        let mode = Cleaner.mode(for: category, hardDeleteNonCache: config.hardDeleteNonCache)
-        statusText = "Cleaning \(category.name)"
-        let outcome = await Task.detached { Cleaner.execute(items: items, mode: mode) }.value
-        statusText = ""
-        report(outcome)
-        await scan()
+    func requestQuickClean() {
+        guard canStartOperation, let snapshot, !snapshot.quickCleanEntries.isEmpty else { return }
+        cleanupRequest = CleanupRequest(title: "Clean Caches & Logs", items: snapshot.quickCleanEntries,
+                                        mode: .hardDelete)
     }
 
-    func quickClean() async {
-        guard let snapshot else { return }
-        var items: [SizedEntry] = []
-        for id in ["userCaches", "appLogs", "developer", "trash"] {
-            items.append(contentsOf: snapshot.category(id)?.entries ?? [])
+    func requestClean(category: StorageCategory, items: [SizedEntry]) {
+        guard canStartOperation, !items.isEmpty else { return }
+        cleanupRequest = CleanupRequest(title: "Clean \(category.name)", items: items,
+            mode: Cleaner.mode(for: category, hardDeleteNonCache: config.hardDeleteNonCache))
+    }
+
+    func requestDevTools() {
+        guard canStartOperation, !enabledDevToolIDs.isEmpty else { return }
+        cleanupRequest = CleanupRequest(title: "Clean Dev Tools", items: [], mode: .hardDelete,
+                                        toolIDs: enabledDevToolIDs)
+    }
+
+    func performCleanup(_ request: CleanupRequest) async {
+        guard canStartOperation, diskOperationsEnabled else { return }
+        cleaning = true
+        defer { cleaning = false; statusText = "" }
+        statusText = request.title
+        if request.toolIDs.isEmpty {
+            let outcome = await Task.detached {
+                Cleaner.execute(items: request.items, mode: request.mode)
+            }.value
+            report(outcome)
+        } else {
+            let failures = await executeDevTools(request.toolIDs)
+            banner = Banner(text: failures.isEmpty ? "Dev tool cleanup finished" : failures.joined(separator: "\n"),
+                            kind: failures.isEmpty ? .success : .failure)
         }
-        guard !items.isEmpty else { return }
-        statusText = "Cleaning caches"
-        let outcome = await Task.detached { Cleaner.execute(items: items, mode: .hardDelete) }.value
-        statusText = ""
-        report(outcome)
-        await scan()
+        await refreshSnapshot()
     }
 
     // MARK: Full clean
@@ -156,9 +197,9 @@ final class Store {
         for step in steps {
             switch step.work {
             case .userCategory(let id):
-                bytes += snapshot?.category(id)?.totalBytes ?? 0
+                bytes += snapshot?.category(id)?.entries.reduce(0) { $0 + $1.bytes } ?? 0
             case .devTools:
-                bytes += snapshot?.category("devTools")?.totalBytes ?? 0
+                bytes += enabledDevToolBytes(excludingUserCaches: true)
             case .system(let snapshots):
                 bytes += snapshot?.category("systemCaches")?.totalBytes ?? 0
                 if snapshots { bytes += snapshot?.category("snapshots")?.totalBytes ?? 0 }
@@ -174,6 +215,7 @@ final class Store {
     }
 
     func requestFullClean() {
+        guard canStartOperation, snapshot != nil else { return }
         pendingFullCleanRequest = true
     }
 
@@ -183,10 +225,10 @@ final class Store {
         applyActivationPolicy()
     }
 
-    func performFullClean(includeSystem: Bool, includeSnapshots: Bool) async {
-        guard !fullCleanRunning else { return }
+    func performFullClean(includeSystem: Bool, includeSnapshots: Bool, reviewedScript: String?,
+                          reviewedSnapshot: ScanSnapshot, devToolIDs: [String]) async {
+        guard canStartOperation, diskOperationsEnabled, snapshot != nil, !includeSystem || reviewedScript != nil else { return }
 
-        let devToolIDs = enabledDevToolIDs
         let steps = FullClean.plan(includeSystem: includeSystem,
                                    includeSnapshots: includeSnapshots,
                                    devToolIDs: devToolIDs)
@@ -199,10 +241,8 @@ final class Store {
         fullCleanRunning = true
         applyActivationPolicy()
 
-        // Refresh sizes: the per-phase figures and the disk baseline come from this.
-        await scan()
-        report.diskBefore = snapshot?.disk ?? report.diskBefore
-        fullCleanReport = report
+        // Keep the reviewed scan stable. A new scan here could add unreviewed
+        // items to a destructive operation.
 
         for step in steps {
             report.update(step.id) { $0.status = .running }
@@ -212,18 +252,18 @@ final class Store {
 
             switch step.work {
             case .userCategory(let id):
-                await runUserCategoryPhase(id, into: &report, stepID: step.id)
+                await runUserCategoryPhase(id, entries: reviewedSnapshot.category(id)?.entries ?? [], into: &report, stepID: step.id)
             case .devTools(let ids):
                 await runDevToolsPhase(ids, into: &report, stepID: step.id)
             case .system(let snapshots):
-                await runSystemPhase(includeSnapshots: snapshots, into: &report, stepID: step.id)
+                await runSystemPhase(includeSnapshots: snapshots, script: reviewedScript!, into: &report, stepID: step.id)
             }
 
             fullCleanReport = report
             try? await Task.sleep(for: .milliseconds(300))
         }
 
-        await scan()
+        await refreshSnapshot()
         report.diskAfter = snapshot?.disk ?? DiskInfo.current()
         report.finishedAt = Date()
         fullCleanReport = report
@@ -231,12 +271,11 @@ final class Store {
         evaluateAlerts()
     }
 
-    private func runUserCategoryPhase(_ id: String, into report: inout FullCleanReport, stepID: String) async {
+    private func runUserCategoryPhase(_ id: String, entries: [SizedEntry], into report: inout FullCleanReport, stepID: String) async {
         guard let category = Catalog.category(id) else {
             report.update(stepID) { $0.status = .skipped }
             return
         }
-        let entries = snapshot?.category(id)?.entries ?? []
         guard !entries.isEmpty else {
             report.update(stepID) { $0.status = .done; $0.note = "Already clean" }
             return
@@ -247,39 +286,54 @@ final class Store {
             $0.freedBytes = outcome.freedBytes
             $0.removedCount = outcome.removed.count
             $0.skippedCount = outcome.failed.count
-            $0.status = .done
+            $0.status = outcome.failed.isEmpty ? .done : .failed
             if !outcome.failed.isEmpty {
                 $0.note = "\(outcome.failed.count) skipped"
             }
         }
     }
 
-    private func runDevToolsPhase(_ ids: [String], into report: inout FullCleanReport, stepID: String) async {
-        var estimate: Int64 = 0
-        var ran = 0
-        for id in ids {
-            guard
-                let tool = ToolCleaner.tools.first(where: { $0.id == id }),
-                let path = detectedTools[id]
-            else { continue }
-            if let directory = tool.cacheDirectory {
-                let expanded = expandTilde(directory)
-                estimate += snapshot?.category("devTools")?.entries.first { $0.path == expanded }?.bytes ?? 0
-            }
-            _ = await ToolCleaner.run(tool, binaryPath: path)
-            ran += 1
-        }
-        report.update(stepID) {
-            $0.freedBytes = estimate
-            $0.status = ran > 0 ? .done : .skipped
-            $0.note = ran > 0 ? "\(ran) tool\(ran == 1 ? "" : "s") · estimated" : nil
+    func enabledDevToolBytes(excludingUserCaches: Bool = false) -> Int64 {
+        let userEntries = snapshot?.category("userCaches")?.entries ?? []
+        return ToolCleaner.tools.filter { enabledDevToolIDs.contains($0.id) }.reduce(0) { total, tool in
+            guard let directory = tool.cacheDirectory else { return total }
+            let path = expandTilde(directory)
+            if excludingUserCaches && userEntries.contains(where: {
+                path == $0.path || path.hasPrefix($0.path + "/")
+            }) { return total }
+            return total + (snapshot?.category("devTools")?.entries.first { $0.path == path }?.bytes ?? 0)
         }
     }
 
-    private func runSystemPhase(includeSnapshots: Bool, into report: inout FullCleanReport, stepID: String) async {
+    private func executeDevTools(_ ids: [String]) async -> [String] {
+        var failures: [String] = []
+        for id in ids {
+            guard let tool = ToolCleaner.tools.first(where: { $0.id == id }),
+                  let path = detectedTools[id] else {
+                failures.append("\(id): tool is no longer available.")
+                continue
+            }
+            statusText = "Running \(tool.name) cleanup"
+            let result = await ToolCleaner.run(tool, binaryPath: path)
+            if let failure = result.failureDescription { failures.append("\(tool.name): \(failure)") }
+        }
+        return failures
+    }
+
+    private func runDevToolsPhase(_ ids: [String], into report: inout FullCleanReport, stepID: String) async {
+        let before = await ToolCleaner.cacheBytes(for: ids)
+        let failures = await executeDevTools(ids)
+        let after = await ToolCleaner.cacheBytes(for: ids)
+        report.update(stepID) {
+            $0.freedBytes = max(0, before - after)
+            $0.status = failures.isEmpty ? .done : .failed
+            $0.note = failures.isEmpty ? "\(ids.count) tool(s) completed" : failures.joined(separator: "\n")
+        }
+    }
+
+    private func runSystemPhase(includeSnapshots: Bool, script: String, into report: inout FullCleanReport, stepID: String) async {
         let estimate = (snapshot?.category("systemCaches")?.totalBytes ?? 0)
             + (includeSnapshots ? (snapshot?.category("snapshots")?.totalBytes ?? 0) : 0)
-        let script = await AdminCleaner.systemCleanScript(includeSnapshots: includeSnapshots)
         do {
             try await AdminCleaner.run(script: script)
             report.update(stepID) {
@@ -296,32 +350,25 @@ final class Store {
     }
 
     func runAdminClean(script: String) async {
+        guard canStartOperation, diskOperationsEnabled else { return }
+        cleaning = true
+        statusText = "Cleaning system files"
+        defer { cleaning = false; statusText = "" }
         do {
             try await AdminCleaner.run(script: script)
             banner = Banner(text: "System cleanup finished", kind: .success)
-            await scan()
         } catch {
             banner = Banner(text: error.localizedDescription, kind: .failure)
         }
-    }
-
-    func runDevTools(_ ids: [String]) async {
-        guard !ids.isEmpty else { return }
-        for id in ids {
-            guard
-                let tool = ToolCleaner.tools.first(where: { $0.id == id }),
-                let path = detectedTools[id]
-            else { continue }
-            statusText = "Running \(tool.name) cleanup"
-            _ = await ToolCleaner.run(tool, binaryPath: path)
-        }
-        statusText = ""
-        banner = Banner(text: "Dev tool cleanup finished", kind: .success)
-        await scan()
+        await refreshSnapshot()
     }
 
     private func report(_ outcome: CleanOutcome) {
-        if outcome.freedBytes > 0 {
+        if outcome.trashedBytes > 0 {
+            let skipped = outcome.failed.isEmpty ? "" : " · \(outcome.failed.count) skipped"
+            banner = Banner(text: "Moved \(Format.bytes(outcome.trashedBytes)) to Trash\(skipped). Empty the Trash to free space.",
+                            kind: outcome.failed.isEmpty ? .success : .info)
+        } else if outcome.freedBytes > 0 {
             let skipped = outcome.failed.isEmpty ? "" : ", \(outcome.failed.count) skipped"
             banner = Banner(text: "Freed \(Format.bytes(outcome.freedBytes))\(skipped)",
                             kind: outcome.failed.isEmpty ? .success : .info)

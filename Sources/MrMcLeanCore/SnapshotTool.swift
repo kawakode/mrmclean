@@ -19,7 +19,7 @@ public enum SnapshotTool {
         var rest = snapshotName.dropFirst(prefix.count)
         if let dot = rest.firstIndex(of: ".") { rest = rest[..<dot] }
         let value = String(rest)
-        return value.isEmpty ? nil : value
+        return value.range(of: #"^\d{4}-\d{2}-\d{2}-\d{6}$"#, options: .regularExpression) != nil ? value : nil
     }
 
     public static func date(from stamp: String) -> Date? {

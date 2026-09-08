@@ -23,8 +23,11 @@ struct RingChart: View {
                            lineWidth: lineWidth)
 
             var start = Angle.degrees(-90)
-            for segment in segments where segment.value > 0 {
-                let end = start + .degrees(360 * min(segment.value, 1))
+            var remaining = 1.0
+            for segment in segments where segment.value > 0 && remaining > 0 {
+                let value = min(segment.value, remaining)
+                remaining -= value
+                let end = start + .degrees(360 * value)
                 var arc = Path()
                 arc.addArc(center: center, radius: radius, startAngle: start,
                            endAngle: end, clockwise: false)

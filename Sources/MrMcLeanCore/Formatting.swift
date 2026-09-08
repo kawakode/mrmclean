@@ -4,7 +4,8 @@ public enum Format {
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
-        formatter.allowedUnits = [.useGB, .useMB, .useKB]
+        formatter.allowedUnits = [.useTB, .useGB, .useMB, .useKB, .useBytes]
+        formatter.allowsNonnumericFormatting = false
         return formatter
     }()
 
@@ -19,6 +20,7 @@ public enum Format {
     }
 
     public static func relativeDate(_ date: Date) -> String {
+        if abs(date.timeIntervalSinceNow) < 5 { return "just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())

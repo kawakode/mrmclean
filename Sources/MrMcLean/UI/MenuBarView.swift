@@ -53,17 +53,23 @@ struct MenuBarView: View {
                 ProgressView(value: store.progress).progressViewStyle(.linear)
             }
 
+            if store.isBusy {
+                Text(store.statusText.isEmpty ? "Full Clean in progress…" : store.statusText)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Divider()
             HStack {
                 Button(store.scanning ? "Scanning..." : "Scan Now") {
                     Task { await store.scan() }
                 }
-                .disabled(store.scanning)
+                .disabled(!store.canStartOperation)
                 Spacer()
-                Button("Clean Caches") {
-                    Task { await store.quickClean() }
+                Button("Clean Caches…") {
+                    openWindow(id: "main")
+                    MainWindow.show()
+                    store.requestQuickClean()
                 }
-                .disabled(store.scanning || (store.snapshot?.quickCleanBytes ?? 0) == 0)
+                .disabled(!store.canStartOperation || (store.snapshot?.quickCleanBytes ?? 0) == 0)
             }
             Button {
                 openWindow(id: "main")
@@ -73,7 +79,7 @@ struct MenuBarView: View {
                 Label("Full Clean…", systemImage: "sparkles").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(store.scanning || store.fullCleanReport != nil)
+            .disabled(!store.canStartOperation || store.snapshot == nil)
             HStack {
                 Button("Open") {
                     openWindow(id: "main")
@@ -91,5 +97,6 @@ struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 288)
+        .task { await store.startup() }
     }
 }

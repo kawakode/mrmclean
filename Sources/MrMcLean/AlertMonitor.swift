@@ -13,7 +13,7 @@ final class AlertMonitor {
 
     func reschedule() {
         task?.cancel()
-        guard let store, store.config.alertsEnabled else { return }
+        guard let store else { return }
         let seconds = max(0.25, store.config.scanIntervalHours) * 3600
         task = Task { [weak self] in
             while !Task.isCancelled {
@@ -25,7 +25,7 @@ final class AlertMonitor {
     }
 
     private func tick() async {
-        guard let store, !store.scanning else { return }
+        guard let store, store.canStartOperation else { return }
         await store.scan()
     }
 }

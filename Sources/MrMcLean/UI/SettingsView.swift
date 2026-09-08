@@ -38,6 +38,7 @@ private struct GeneralSettings: View {
                         }
                     }
                 ))
+                .disabled(!LoginItem.isSupported)
                 if !LoginItem.isSupported {
                     Text("Available once the app runs from a built bundle.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -70,6 +71,8 @@ private struct AlertSettings: View {
         Form {
             Section {
                 Toggle("Enable storage alerts", isOn: $store.config.alertsEnabled)
+            }
+            Section("Repeat alerts") {
                 Picker("Silence repeats for", selection: $store.config.cooldownHours) {
                     Text("6 hours").tag(6.0)
                     Text("12 hours").tag(12.0)
@@ -82,14 +85,15 @@ private struct AlertSettings: View {
                     Text("10%").tag(10.0)
                 }
             }
+            .disabled(!store.config.alertsEnabled)
             Section("Threshold per category, as a share of the disk") {
                 ForEach(Catalog.all.filter { $0.supportsAlerts }) { category in
                     thresholdRow(category)
                 }
             }
+            .disabled(!store.config.alertsEnabled)
         }
         .formStyle(.grouped)
-        .disabled(!store.config.alertsEnabled)
     }
 
     private func thresholdRow(_ category: StorageCategory) -> some View {
@@ -133,15 +137,24 @@ private struct CleanerSettings: View {
                 Text("Caches, logs and derived data are always deleted outright.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Detected dev tools") {
+            Section("Dev tools included in Full Clean") {
                 ForEach(ToolCleaner.tools) { tool in
-                    HStack {
-                        Text(tool.name)
-                        Spacer()
-                        Text(store.detectedTools[tool.id] != nil ? "found" : "not found")
-                            .font(.caption)
-                            .foregroundStyle(store.detectedTools[tool.id] != nil ? .green : .secondary)
+                    Toggle(isOn: Binding(
+                        get: { store.config.enabledDevTools.contains(tool.id) },
+                        set: { enabled in
+                            if enabled { store.config.enabledDevTools.insert(tool.id) }
+                            else { store.config.enabledDevTools.remove(tool.id) }
+                        }
+                    )) {
+                        HStack {
+                            Text(tool.name)
+                            Spacer()
+                            if store.detectedTools[tool.id] == nil {
+                                Text("Not installed").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                     }
+                    .disabled(store.detectedTools[tool.id] == nil || store.isBusy)
                 }
             }
         }

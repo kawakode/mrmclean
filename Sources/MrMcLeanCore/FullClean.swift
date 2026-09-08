@@ -110,7 +110,7 @@ public struct FullCleanReport: Sendable {
     public var totalFreedBytes: Int64 { phases.reduce(0) { $0 + $1.freedBytes } }
     public var totalRemoved: Int { phases.reduce(0) { $0 + $1.removedCount } }
     public var totalSkipped: Int { phases.reduce(0) { $0 + $1.skippedCount } }
-    public var anyFailed: Bool { phases.contains { $0.status == .failed } }
+    public var anyFailed: Bool { phases.contains { $0.status == .failed || $0.skippedCount > 0 } }
 
     /// Real free-space gain measured from the volume, when both readings exist.
     /// Preferred over `totalFreedBytes` for the headline number.
@@ -119,11 +119,10 @@ public struct FullCleanReport: Sendable {
         return max(0, after.availableBytes - diskBefore.availableBytes)
     }
 
-    /// The best number to show the user: the measured volume delta if we have it
-    /// and it is positive, otherwise the sum of the per-phase figures.
+    /// A measured zero is still a valid result. Never replace it with estimates
+    /// that claim space was freed when the disk did not gain any.
     public var headlineFreedBytes: Int64 {
-        if let measured = diskFreedBytes, measured > 0 { return measured }
-        return totalFreedBytes
+        diskFreedBytes ?? totalFreedBytes
     }
 
     public var duration: TimeInterval {

@@ -257,29 +257,140 @@ do {
     h.expect(report.isComplete, "a finished report is complete")
 }
 do {
-    // Falls back to the per-phase sum when the volume shows no gain.
+    // A measured zero must not be replaced by an optimistic estimate.
     let disk = DiskInfo(totalBytes: 1000, rawAvailable: 100, importantAvailable: 100)
     var report = FullCleanReport(phases: [FullCleanPhase(id: "a", title: "A", symbol: "x")],
                                  diskBefore: disk)
     report.update("a") { $0.status = .done; $0.freedBytes = 250 }
     report.diskAfter = disk
-    h.expectEqual(report.headlineFreedBytes, 250, "headline falls back to the phase sum with no volume gain")
+    h.expectEqual(report.headlineFreedBytes, 0, "headline preserves a measured zero volume gain")
+}
+
+
+// MARK: Regression checks
+
+h.group("Cleanup regressions")
+h.expect(ProbeIssues.classify(stderr: "unknown failure", timedOut: false, exitCode: 1).contains(.failed),
+         "unrecognized probe failures are flagged")
+h.expectEqual(Format.relativeDate(Date()), "just now", "fresh scans do not read in zero seconds")
+
+h.expectNoThrow("Mail Downloads children are cleanable") {
+    try SafePath.validate("\(home)/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/attachment.pdf")
+}
+h.expectThrows("Mail Downloads root is retained") {
+    try SafePath.validate("\(home)/Library/Containers/com.apple.mail/Data/Library/Mail Downloads")
+}
+h.expectThrows("a cache-like container name is rejected") {
+    try SafePath.validate("\(home)/Library/Containers/com.example.app/Data/Library/CachesBackup/important")
+}
+h.expectThrows("a nested fake cache subtree is rejected") {
+    try SafePath.validate("\(home)/Library/Containers/com.example.app/Documents/Data/Library/Caches/file")
+}
+h.expectThrows("a developer prefix lookalike is rejected") {
+    try SafePath.validate("\(home)/Library/Developer/Xcode/ArchivesPersonal/file")
+}
+h.expectThrows("developer cache root is retained") {
+    try SafePath.validate("\(home)/Library/Developer/Xcode/DerivedData")
+}
+h.expect(SnapshotTool.stamp(from: "com.apple.TimeMachine.2024-01-15-123456;whoami.local") == nil,
+         "snapshot stamps reject shell metacharacters")
+
+do {
+    let entries = [SizedEntry(path: "/cache/tool/child", bytes: 40),
+                   SizedEntry(path: "/cache/tool", bytes: 100),
+                   SizedEntry(path: "/cache/tool", bytes: 100),
+                   SizedEntry(path: "/cache/tool-other", bytes: 20)]
+    let unique = Cleaner.uniqueItems(entries)
+    h.expectEqual(unique.count, 2, "nested and duplicate entries counted only once")
+    h.expectEqual(unique.reduce(0) { $0 + $1.bytes }, 120, "sibling prefixes remain distinct")
+    let snapshot = ScanSnapshot(disk: DiskInfo(totalBytes: 1000, rawAvailable: 100, importantAvailable: 100),
+        categories: [
+            CategoryScan(category: Catalog.userCaches, totalBytes: 120, entries: unique, itemCount: 2),
+            CategoryScan(category: Catalog.developer, totalBytes: 500,
+                         entries: [SizedEntry(path: "/archives", bytes: 500)], itemCount: 1),
+            CategoryScan(category: Catalog.trash, totalBytes: 200,
+                         entries: [SizedEntry(path: "/trash", bytes: 200)], itemCount: 1)
+        ], date: Date())
+    h.expectEqual(snapshot.quickCleanBytes, 120, "quick cleanup excludes developer archives and Trash")
+    var report = FullCleanReport(phases: [FullCleanPhase(id: "partial", title: "Partial", symbol: "x")],
+                                 diskBefore: snapshot.disk)
+    report.update("partial") { $0.status = .done; $0.skippedCount = 2 }
+    h.expect(report.anyFailed, "skipped deletions prevent an all-clean report")
+}
+
+h.group("Filesystem and command regressions")
+
+do {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("MrMcLean-tests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let looseFile = root.appendingPathComponent("loose.log")
+    let newlineFile = root.appendingPathComponent("line\nbreak.dat")
+    try Data(repeating: 65, count: 8192).write(to: looseFile)
+    try Data(repeating: 66, count: 16384).write(to: newlineFile)
+    let trash = root.appendingPathComponent(".Trash")
+    try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+    try Data(repeating: 67, count: 32768).write(to: trash.appendingPathComponent("excluded.dat"))
+
+    let parsed = await SizeProbe.breakdown(root.path)
+    h.expect(parsed.children.contains { $0.path == looseFile.resolvingSymlinksInPath().path }, "loose files appear in cleanup breakdown")
+    h.expect(parsed.children.contains { $0.path == newlineFile.resolvingSymlinksInPath().path }, "newline file appears in cleanup breakdown")
+
+
+    let cacheFixture = URL(fileURLWithPath: home).appendingPathComponent("Library/Caches/MrMcLean-tests-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: cacheFixture, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cacheFixture) }
+    let link = cacheFixture.appendingPathComponent("escape")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root)
+    let rejected = Cleaner.execute(items: [SizedEntry(path: link.appendingPathComponent("loose.log").path, bytes: 8192)], mode: .hardDelete)
+    h.expectEqual(rejected.failed.count, 1, "cleanup rejects symlink escape from an allowed cache")
+    h.expect(FileManager.default.fileExists(atPath: looseFile.path), "rejected cleanup preserves target data")
+    let owned = cacheFixture.appendingPathComponent("owned-test-file")
+    try Data(repeating: 42, count: 4096).write(to: owned)
+    let duplicate = SizedEntry(path: owned.path, bytes: 4096)
+    let cleaned = Cleaner.execute(items: [duplicate, duplicate], mode: .hardDelete)
+    h.expectEqual(cleaned.removed.count, 1, "real duplicate deletion removes one fixture file")
+    h.expectEqual(cleaned.freedBytes, 4096, "real duplicate deletion counts space once")
+    h.expect(!FileManager.default.fileExists(atPath: owned.path), "cleaner removed the fixture file")
+
+    let found = await LargeFiles.scan(minimumBytes: 1024, limit: 1, root: root.path)
+    h.expectEqual(found.totalFound, 2, "large-file scan excludes Trash")
+    h.expectEqual(found.entries.count, 1, "large-file limit retains total match count")
+    h.expectEqual(found.totalBytes, 24576, "large-file totals include matches beyond the display limit")
+    var summary = ScanSnapshot(disk: DiskInfo(totalBytes: 100000, rawAvailable: 1, importantAvailable: 1), categories: [], date: Date())
+    summary.recordLargeFiles(found)
+    summary.recordLargeFiles(found)
+    h.expectEqual(summary.categories.count, 1, "refreshing large files replaces the previous summary")
+    h.expectEqual(summary.category("largeFiles")?.totalBytes, found.totalBytes, "large-file results reach the sidebar and overview summary")
+    h.expectEqual(found.entries.first?.path, newlineFile.path, "newline filename survives large-file scan")
+    h.expect(!found.isPartial, "successful large-file scan is complete")
+    let empty = await LargeFiles.scan(minimumBytes: 100_000, root: root.path)
+    h.expect(empty.entries.isEmpty && !empty.isPartial, "empty scan is a successful completed result")
+    let missing = await LargeFiles.scan(root: root.appendingPathComponent("missing").path)
+    h.expect(missing.isPartial && missing.failure != nil, "failed scan is distinguishable from empty results")
+
+    let failed = await Shell.result("/bin/sh", ["-c", "printf 'tool failed' >&2; exit 7"])
+    h.expect(!failed.succeeded, "nonzero tool exit is not success")
+    h.expectEqual(failed.failureDescription, "tool failed", "tool error details retained")
+    let timedOut = await Shell.result("/bin/sleep", ["5"], timeout: 0.05)
+    h.expect(timedOut.timedOut && !timedOut.succeeded, "timed-out command is a failure")
+    let script = await AdminCleaner.systemCleanScript(includeSnapshots: false)
+    h.expect(!script.contains("exit 0") && script.contains("exit $status"), "administrator script propagates failures")
+    h.expect(!script.contains("2>/dev/null"), "administrator script preserves error details")
+    let syntax = await Shell.result("/bin/sh", ["-n", "-c", script])
+    h.expect(syntax.succeeded, "generated administrator script passes shell syntax check without executing")
+} catch {
+    h.expect(false, "filesystem regression fixture: \(error)")
 }
 
 // MARK: Optional live scan against the real disk (MRMCLEAN_LIVE=1)
 
 if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {
     h.group("Live scan")
-    let semaphore = DispatchSemaphore(value: 0)
-    nonisolated(unsafe) var snapshot: ScanSnapshot?
-    Task {
-        snapshot = await Scanner.run { fraction, name in
-            FileHandle.standardError.write(Data("  \(Int(fraction * 100))% \(name)\n".utf8))
-        }
-        semaphore.signal()
+    let snapshot = await Scanner.run { fraction, name in
+        FileHandle.standardError.write(Data("  \(Int(fraction * 100))% \(name)\n".utf8))
     }
-    semaphore.wait()
-    if let snapshot {
+    do {
         h.expect(snapshot.disk.totalBytes > 0, "disk capacity is reported")
         print("  Full Disk Access: \(snapshot.fullDiskAccess.rawValue)")
         for scan in snapshot.categories {
@@ -292,8 +403,6 @@ if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {
         if snapshot.sizesUnderReported {
             print("  -> sizes are under-reported")
         }
-    } else {
-        h.expect(false, "live scan returned a snapshot")
     }
 }
 

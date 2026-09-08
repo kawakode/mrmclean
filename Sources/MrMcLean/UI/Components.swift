@@ -26,7 +26,7 @@ struct UsageBar: View {
                 Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.4))
                 Capsule()
                     .fill(tint)
-                    .frame(width: max(3, geometry.size.width * clamp(fraction)))
+                    .frame(width: fraction > 0 ? max(3, geometry.size.width * clamp(fraction)) : 0)
                 if let threshold, threshold > 0, threshold < 1 {
                     Rectangle()
                         .fill(Color.primary.opacity(0.55))

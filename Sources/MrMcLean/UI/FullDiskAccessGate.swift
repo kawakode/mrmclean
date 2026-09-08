@@ -15,61 +15,64 @@ struct FullDiskAccessGate: View {
     var body: some View {
         ZStack {
             backdrop
-            VStack(spacing: 22) {
-                icon
-                VStack(spacing: 8) {
-                    Text("MrMcLean needs Full Disk Access")
-                        .font(.title.weight(.semibold))
-                    Text("""
-                    macOS keeps caches, logs, Mail, Messages and Safari data hidden from \
-                    apps that don't hold Full Disk Access. Without it MrMcLean can't measure \
-                    your storage accurately or clean it.
-                    """)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 440)
-                }
-
-                steps
-
-                waitingIndicator
-
-                VStack(spacing: 10) {
-                    Button {
-                        openSettings()
-                    } label: {
-                        Text("Open Full Disk Access Settings")
-                            .frame(maxWidth: 300)
+            ScrollView {
+                VStack(spacing: 22) {
+                    icon
+                    VStack(spacing: 8) {
+                        Text("MrMcLean needs Full Disk Access")
+                            .font(.title.weight(.semibold))
+                        Text("""
+                        macOS keeps caches, logs, Mail, Messages and Safari data hidden from \
+                        apps that don't hold Full Disk Access. Without it MrMcLean can't measure \
+                        your storage accurately or clean it.
+                        """)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 440)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
 
-                    HStack(spacing: 14) {
-                        Button("Check Again") {
-                            store.refreshAccess()
-                            withAnimation { justChecked = true }
-                            Task {
-                                try? await Task.sleep(for: .seconds(2))
-                                withAnimation { justChecked = false }
+                    steps
+
+                    waitingIndicator
+
+                    VStack(spacing: 10) {
+                        Button {
+                            openSettings()
+                        } label: {
+                            Text("Open Full Disk Access Settings")
+                                .frame(maxWidth: 300)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+
+                        HStack(spacing: 14) {
+                            Button("Check Again") {
+                                store.refreshAccess()
+                                withAnimation { justChecked = true }
+                                Task {
+                                    try? await Task.sleep(for: .seconds(2))
+                                    withAnimation { justChecked = false }
+                                }
+                            }
+                            if isBundled {
+                                Button("Quit & Reopen") { relaunch() }
                             }
                         }
-                        if isBundled {
-                            Button("Quit & Reopen") { relaunch() }
-                        }
-                    }
-                    .controlSize(.small)
+                        .controlSize(.small)
 
-                    Button("Continue with limited access") {
-                        store.continueWithoutAccess()
+                        Button("Continue with limited access") {
+                            store.continueWithoutAccess()
+                        }
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
                     }
-                    .buttonStyle(.link)
-                    .padding(.top, 2)
                 }
+                .padding(40)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
             }
-            .padding(40)
-            .frame(maxWidth: 560)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await pollForAccess() }
@@ -177,8 +180,12 @@ struct FullDiskAccessGate: View {
         let bundleURL = Bundle.main.bundleURL
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration) { _, error in
+            DispatchQueue.main.async {
+                guard error == nil else { return }
+                AppDelegate.userWantsQuit = true
+                NSApp.terminate(nil)
+            }
         }
     }
 }

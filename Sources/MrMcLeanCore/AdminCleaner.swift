@@ -17,7 +17,6 @@ public enum AdminCleaner {
     static let systemTargets = [
         "/Library/Caches",
         "/Library/Logs",
-        "/Library/Logs/DiagnosticReports",
         "/Library/Application Support/CrashReporter",
     ]
 
@@ -26,25 +25,26 @@ public enum AdminCleaner {
             "#!/bin/sh",
             "# MrMcLean system cleanup. Review every line before continuing.",
             "set -u",
+            "status=0",
         ]
         for target in systemTargets {
-            lines.append("[ -d \"\(target)\" ] && /usr/bin/find \"\(target)\" -mindepth 1 -maxdepth 1 -exec /bin/rm -rf {} + 2>/dev/null")
+            lines.append("if [ -d \"\(target)\" ]; then /usr/bin/find \"\(target)\" -mindepth 1 -maxdepth 1 -exec /bin/rm -rf {} + || status=1; fi")
         }
-        lines.append("/usr/bin/find /private/var/log -type f -name '*.gz' -delete 2>/dev/null || true")
+        lines.append("/usr/bin/find /private/var/log -type f -name '*.gz' -delete || status=1")
         if includeSnapshots {
             lines.append("# Time Machine local snapshots")
             for command in await SnapshotTool.deleteCommands() {
-                lines.append(command)
+                lines.append(command + " || status=1")
             }
         }
-        lines.append("exit 0")
+        lines.append("exit $status")
         return lines.joined(separator: "\n") + "\n"
     }
 
     public static func snapshotOnlyScript() async -> String {
-        var lines = ["#!/bin/sh", "set -u"]
-        for command in await SnapshotTool.deleteCommands() { lines.append(command) }
-        lines.append("exit 0")
+        var lines = ["#!/bin/sh", "set -u", "status=0"]
+        for command in await SnapshotTool.deleteCommands() { lines.append(command + " || status=1") }
+        lines.append("exit $status")
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -58,8 +58,8 @@ public enum AdminCleaner {
 
         let appleScript = "do shell script \"/bin/sh \" & quoted form of \"\(fileURL.path)\" with administrator privileges"
         let result = await Shell.result("/usr/bin/osascript", ["-e", appleScript], timeout: 900)
-        if result.code != 0 {
-            throw AdminCleanerError.cancelledOrFailed(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        if !result.succeeded {
+            throw AdminCleanerError.cancelledOrFailed(result.failureDescription ?? "The administrator step failed.")
         }
     }
 }

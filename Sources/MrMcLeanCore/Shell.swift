@@ -8,6 +8,15 @@ public enum Shell {
         public var stderr: String
         public var code: Int32
         public var timedOut: Bool
+
+        public var succeeded: Bool { code == 0 && !timedOut }
+
+        public var failureDescription: String? {
+            guard !succeeded else { return nil }
+            if timedOut { return "The command timed out." }
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return detail.isEmpty ? "The command exited with status \(code)." : String(detail.prefix(1200))
+        }
     }
 
     public static func run(
@@ -46,7 +55,15 @@ public enum Shell {
                     let errPipe = Pipe()
                     process.standardOutput = outPipe
                     process.standardError = errPipe
-                    box.attach(process)
+                    do {
+                        guard try box.launch(process) else {
+                            continuation.resume(returning: Result(stdout: "", stderr: "Cancelled", code: -1, timedOut: false))
+                            return
+                        }
+                    } catch {
+                        continuation.resume(returning: Result(stdout: "", stderr: "\(error)", code: -1, timedOut: false))
+                        return
+                    }
 
                     var outData = Data()
                     var errData = Data()
@@ -60,13 +77,6 @@ public enum Shell {
                     DispatchQueue.global().async {
                         errData = (try? errPipe.fileHandleForReading.readToEnd()) ?? Data()
                         group.leave()
-                    }
-
-                    do {
-                        try process.run()
-                    } catch {
-                        continuation.resume(returning: Result(stdout: "", stderr: "\(error)", code: -1, timedOut: false))
-                        return
                     }
 
                     let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
@@ -102,13 +112,19 @@ private final class ProcessBox: @unchecked Sendable {
     private var process: Process?
     private var timedOut = false
 
-    func attach(_ process: Process) {
+    private var cancelled = false
+
+    func launch(_ process: Process) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { return false }
+        try process.run()
         self.process = process
+        return true
     }
 
     func terminate() {
         lock.lock(); defer { lock.unlock() }
+        cancelled = true
         if process?.isRunning == true { process?.terminate() }
     }
 

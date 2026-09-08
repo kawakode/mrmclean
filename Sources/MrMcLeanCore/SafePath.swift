@@ -73,7 +73,12 @@ public enum SafePath {
         guard underAllowedRoot else { throw SafePathError.outsideAllowlist(path) }
 
         if path.hasPrefix("\(home)/Library/Containers/") {
-            guard path.contains("/Data/Library/Caches") else {
+            let relative = String(path.dropFirst("\(home)/Library/Containers/".count))
+            let components = relative.split(separator: "/")
+            let isCache = components.count >= 4
+                && components[1...3].map(String.init) == ["Data", "Library", "Caches"]
+            let mailDownloads = "\(home)/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"
+            guard isCache || path.hasPrefix(mailDownloads + "/") else {
                 throw SafePathError.outsideAllowlist(path)
             }
         }
@@ -83,7 +88,9 @@ public enum SafePath {
                 "Xcode/iOS DeviceSupport", "Xcode/watchOS DeviceSupport",
                 "Xcode/tvOS DeviceSupport", "CoreSimulator/Caches",
             ]
-            let ok = allowedDeveloperSubtrees.contains { path.contains("/Developer/\($0)") }
+            let ok = allowedDeveloperSubtrees.contains {
+                path.hasPrefix("\(home)/Library/Developer/\($0)/")
+            }
             guard ok else { throw SafePathError.outsideAllowlist(path) }
         }
     }

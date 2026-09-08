@@ -10,15 +10,29 @@ struct FullCleanView: View {
         ZStack {
             AnimatedBackdrop()
             if let report = store.fullCleanReport {
-                Group {
+                ScrollView {
+                    Group {
+                        if report.isComplete {
+                            FullCleanReportView(report: report)
+                        } else {
+                            FullCleanRunningView(report: report)
+                        }
+                    }
+                    .frame(maxWidth: 520)
+                    .padding(24)
+                    .frame(maxWidth: .infinity)
+                }
+                .safeAreaInset(edge: .bottom) {
                     if report.isComplete {
-                        FullCleanReportView(report: report) { store.dismissFullClean() }
-                    } else {
-                        FullCleanRunningView(report: report)
+                        Button("Done") { store.dismissFullClean() }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .keyboardShortcut(.defaultAction)
+                            .padding(14)
+                            .frame(maxWidth: .infinity)
+                            .background(.regularMaterial)
                     }
                 }
-                .frame(maxWidth: 520)
-                .padding(40)
                 .transition(.opacity)
             }
         }
@@ -67,7 +81,7 @@ private struct FullCleanRunningView: View {
                     .monospacedDigit()
                     .contentTransition(.numericText())
                     .animation(.snappy, value: report.totalFreedBytes)
-                Text("freed so far")
+                Text("removed so far · estimated")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -98,7 +112,6 @@ private struct FullCleanRunningView: View {
 
 private struct FullCleanReportView: View {
     let report: FullCleanReport
-    var onDone: () -> Void
 
     @State private var appeared = false
 
@@ -109,13 +122,15 @@ private struct FullCleanReportView: View {
                 .opacity(appeared ? 1 : 0)
 
             VStack(spacing: 6) {
-                Text(report.anyFailed ? "Cleaned, with a hitch" : "All clean")
+                Text(report.anyFailed ? "Cleanup needs attention" : "Cleanup complete")
                     .font(.title.weight(.semibold))
                 Text("Freed \(Format.bytes(report.headlineFreedBytes))")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.accentColor)
                     .contentTransition(.numericText())
                 Text(summaryLine)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -123,14 +138,7 @@ private struct FullCleanReportView: View {
             diskCard
             breakdownCard
 
-            Button {
-                onDone()
-            } label: {
-                Text("Done").frame(maxWidth: 220)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
+
         }
         .padding(28)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
@@ -184,15 +192,24 @@ private struct FullCleanReportView: View {
     private var breakdownCard: some View {
         VStack(spacing: 8) {
             ForEach(report.phases) { phase in
-                HStack(spacing: 10) {
-                    Image(systemName: phaseSymbol(phase))
-                        .foregroundStyle(phaseTint(phase))
-                        .frame(width: 18)
-                    Text(phase.title).font(.callout)
-                    Spacer()
-                    Text(phaseValue(phase))
-                        .font(.callout).monospacedDigit()
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        Image(systemName: phaseSymbol(phase))
+                            .foregroundStyle(phaseTint(phase))
+                            .frame(width: 18)
+                        Text(phase.title).font(.callout)
+                        Spacer()
+                        Text(phaseValue(phase))
+                            .font(.callout).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    if let note = phase.note {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(phase.status == .failed ? Color.orange : Color.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
@@ -373,6 +390,9 @@ struct FullCleanSetupSheet: View {
 
     @State private var includeSystem = false
     @State private var includeSnapshots = true
+    @State private var scriptText: String?
+    @State private var preparingScript = false
+    @State private var preparedForSnapshots: Bool?
 
     private var preview: (steps: [FullCleanStep], estimatedBytes: Int64) {
         store.fullCleanPreview(includeSystem: includeSystem, includeSnapshots: includeSnapshots)
@@ -386,42 +406,73 @@ struct FullCleanSetupSheet: View {
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading) {
                     Text("Full Clean").font(.title3.weight(.semibold))
-                    Text("Clears every safe category in one pass.")
+                    Text("Review the categories and options before starting.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
 
-            VStack(spacing: 0) {
-                ForEach(Array(preview.steps.enumerated()), id: \.element.id) { index, step in
-                    HStack(spacing: 10) {
-                        Image(systemName: step.symbol).frame(width: 18).foregroundStyle(.secondary)
-                        Text(step.title).font(.callout)
-                        Spacer()
-                        Text(stepEstimate(step)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(preview.steps.enumerated()), id: \.element.id) { index, step in
+                            HStack(spacing: 10) {
+                                Image(systemName: step.symbol).frame(width: 18).foregroundStyle(.secondary)
+                                Text(step.title).font(.callout)
+                                Spacer()
+                                Text(stepEstimate(step)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 6)
+                            if index < preview.steps.count - 1 { Divider() }
+                        }
                     }
-                    .padding(.vertical, 6)
-                    if index < preview.steps.count - 1 { Divider() }
-                }
-            }
-            .padding(.horizontal, 12)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, 12)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
-            if store.enabledDevToolIDs.isEmpty {
-                Text("Dev tool caches are cleaned only for tools you enable in Settings › Cleaners.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            }
+                    if store.enabledDevToolIDs.isEmpty {
+                        Text("Dev tool caches are cleaned only for tools you enable in Settings › Cleaners.")
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
 
-            Toggle(isOn: $includeSystem) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Also clean system caches & logs")
-                    Text("Root-owned files. Asks for your administrator password once.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle(isOn: $includeSystem) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Also clean system caches & logs")
+                            Text("Root-owned files. Asks for your administrator password once.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if includeSystem {
+                        Toggle("Thin Time Machine local snapshots", isOn: $includeSnapshots)
+                            .padding(.leading, 20)
+                        Text("Administrator commands")
+                            .font(.headline)
+                        if preparingScript || scriptText == nil {
+                            ProgressView("Preparing commands…").controlSize(.small)
+                        } else if let scriptText {
+                            Text(scriptText)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+
+                    Text("Permanently deletes the listed items, including Xcode archives and everything currently in the Trash. Close apps using these files before continuing.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !store.enabledDevToolIDs.isEmpty {
+                        Text("Selected dev-tool commands")
+                            .font(.headline)
+                        ForEach(ToolCleaner.tools.filter { store.enabledDevToolIDs.contains($0.id) }) { tool in
+                            Text(([store.detectedTools[tool.id] ?? tool.binary] + tool.cleanArguments).joined(separator: " "))
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
                 }
+                .padding(.trailing, 4)
             }
-            if includeSystem {
-                Toggle("Thin Time Machine local snapshots", isOn: $includeSnapshots)
-                    .padding(.leading, 20)
-            }
+            .frame(maxHeight: 340)
 
             HStack {
                 Text("Estimated reclaim")
@@ -438,23 +489,39 @@ struct FullCleanSetupSheet: View {
                 Button("Start Full Clean") {
                     let system = includeSystem
                     let snapshots = includeSnapshots
+                    guard let reviewedSnapshot = store.snapshot else { return }
+                    let reviewedScript = scriptText
+                    let toolIDs = store.enabledDevToolIDs
                     dismiss()
-                    Task { await store.performFullClean(includeSystem: system, includeSnapshots: snapshots) }
+                    Task { await store.performFullClean(includeSystem: system, includeSnapshots: snapshots,
+                                                        reviewedScript: reviewedScript,
+                                                        reviewedSnapshot: reviewedSnapshot, devToolIDs: toolIDs) }
                 }
                 .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
+                .disabled(!store.canStartOperation || store.snapshot == nil || (includeSystem && (preparingScript || scriptText == nil || preparedForSnapshots != includeSnapshots)))
             }
         }
         .padding(20)
-        .frame(width: 460)
+        .frame(width: 520)
+        .task(id: "\(includeSystem)-\(includeSnapshots)") {
+            scriptText = nil
+            preparedForSnapshots = nil
+            guard includeSystem else { preparingScript = false; return }
+            preparingScript = true
+            let script = await AdminCleaner.systemCleanScript(includeSnapshots: includeSnapshots)
+            guard !Task.isCancelled else { return }
+            scriptText = script
+            preparedForSnapshots = includeSnapshots
+            preparingScript = false
+        }
     }
 
     private func stepEstimate(_ step: FullCleanStep) -> String {
         switch step.work {
         case .userCategory(let id):
-            return Format.bytes(store.snapshot?.category(id)?.totalBytes ?? 0)
+            return Format.bytes(store.snapshot?.category(id)?.entries.reduce(0) { $0 + $1.bytes } ?? 0)
         case .devTools:
-            return Format.bytes(store.snapshot?.category("devTools")?.totalBytes ?? 0)
+            return Format.bytes(store.enabledDevToolBytes(excludingUserCaches: true))
         case .system(let snapshots):
             let bytes = (store.snapshot?.category("systemCaches")?.totalBytes ?? 0)
                 + (snapshots ? (store.snapshot?.category("snapshots")?.totalBytes ?? 0) : 0)

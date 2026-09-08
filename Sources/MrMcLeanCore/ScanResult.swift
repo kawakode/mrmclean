@@ -49,6 +49,14 @@ public struct ScanSnapshot: Sendable {
         self.fullDiskAccess = fullDiskAccess
     }
 
+    public mutating func recordLargeFiles(_ result: LargeFileScan) {
+        let scan = CategoryScan(category: Catalog.largeFiles, totalBytes: result.totalBytes,
+                                entries: result.entries, itemCount: result.totalFound, issues: result.issues)
+        categories.removeAll { $0.id == "largeFiles" }
+        categories.append(scan)
+        categories.sort { $0.totalBytes > $1.totalBytes }
+    }
+
     public func category(_ id: String) -> CategoryScan? {
         categories.first { $0.id == id }
     }
@@ -70,10 +78,15 @@ public struct ScanSnapshot: Sendable {
         !scanIssues.isEmpty || fullDiskAccess == .denied
     }
 
-    /// Total that a plain "clean everything safe" pass would reclaim without a password.
+    /// The quick action only clears rebuildable caches and logs. Full Clean
+    /// separately reviews developer archives and the Trash.
+    public var quickCleanEntries: [SizedEntry] {
+        Cleaner.uniqueItems(categories
+            .filter { ["userCaches", "appLogs"].contains($0.id) }
+            .flatMap(\.entries))
+    }
+
     public var quickCleanBytes: Int64 {
-        categories
-            .filter { ["userCaches", "appLogs", "trash", "developer"].contains($0.id) }
-            .reduce(0) { $0 + $1.totalBytes }
+        quickCleanEntries.reduce(0) { $0 + max(0, $1.bytes) }
     }
 }

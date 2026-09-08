@@ -10,6 +10,8 @@ struct CategoryDetailView: View {
     @State private var scriptText = ""
     @State private var includeSnapshots = true
     @State private var working = false
+    @State private var selectionInitialized = false
+    @State private var searchText = ""
 
     private var scan: CategoryScan? { store.snapshot?.category(category.id) }
 
@@ -17,6 +19,11 @@ struct CategoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if let scan, !scan.issues.isEmpty {
+                    Label("Some folders could not be measured. Results may be incomplete.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange)
+                }
                 content
             }
             .padding(20)
@@ -25,7 +32,8 @@ struct CategoryDetailView: View {
         .sheet(isPresented: $showScript) { scriptSheet }
         .task(id: scan?.entries.map(\.path) ?? []) {
             let paths = Set(scan?.entries.map(\.path) ?? [])
-            selectedPaths = selectedPaths.isEmpty ? paths : selectedPaths.intersection(paths)
+            selectedPaths = selectionInitialized ? selectedPaths.intersection(paths) : paths
+            selectionInitialized = true
         }
     }
 
@@ -50,7 +58,10 @@ struct CategoryDetailView: View {
                     Label(category.name, systemImage: category.symbol)
                         .font(.title3.weight(.semibold))
                     Spacer()
-                    if let scan {
+                    if category.id == "largeFiles", let result = store.largeFileScan {
+                        Text(Format.bytes(result.totalBytes))
+                            .font(.title3).monospacedDigit().foregroundStyle(.secondary)
+                    } else if let scan, category.id != "largeFiles" {
                         Text(category.id == "snapshots"
                              ? "\(scan.itemCount) snapshots"
                              : Format.bytes(scan.totalBytes))
@@ -71,7 +82,9 @@ struct CategoryDetailView: View {
         let mode = Cleaner.mode(for: category, hardDeleteNonCache: store.config.hardDeleteNonCache)
         return Card {
             if entries.isEmpty {
-                Text("Nothing to clean here.").foregroundStyle(.secondary)
+                Text(store.scanning ? "Scanning…" : scan == nil ? "Run a scan to find cleanable items."
+                     : scan?.issues.isEmpty == false ? "No accessible items found. Grant access or rescan."
+                     : "Nothing to clean here.").foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
@@ -96,6 +109,12 @@ struct CategoryDetailView: View {
                             }
                         }
                         .toggleStyle(.checkbox)
+                        .help(entry.path)
+                        .contextMenu {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)])
+                            }
+                        }
                         .padding(.vertical, 4)
                         Divider()
                     }
@@ -105,11 +124,12 @@ struct CategoryDetailView: View {
                              : "Selected items are moved to the Trash.")
                         .font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Clean Selected") {
-                            Task { await runClean(entries) }
+                        Button("Clean Selected…") {
+                            store.requestClean(category: category,
+                                               items: entries.filter { selectedPaths.contains($0.path) })
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(selectedPaths.isEmpty || working || store.scanning)
+                        .disabled(selectedPaths.isEmpty || working || !store.canStartOperation)
                     }
                     .padding(.top, 10)
                 }
@@ -137,26 +157,53 @@ struct CategoryDetailView: View {
     }
 
     private var largeFilesSection: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
+        let entries = store.largeFiles.filter { searchText.isEmpty || $0.path.localizedCaseInsensitiveContains(searchText) }
+        return Card {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Files over 1 GB in your home folder.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
-                    Button(store.scanningLargeFiles ? "Scanning..." : "Scan Now") {
+                    Button(store.scanningLargeFiles ? "Scanning…" : "Scan Now") {
                         Task { await store.scanLargeFiles() }
                     }
-                    .disabled(store.scanningLargeFiles)
+                    .disabled(!store.canStartOperation)
                 }
-                if store.largeFiles.isEmpty && !store.scanningLargeFiles {
-                    Text("No results yet.").foregroundStyle(.secondary)
+                if store.scanningLargeFiles {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Searching your home folder. This may take a few minutes.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
-                ForEach(store.largeFiles) { entry in
-                    revealRow(
-                        name: entry.path.replacingOccurrences(of: userHome, with: "~"),
-                        bytes: entry.bytes,
-                        path: entry.path
-                    )
+                if let result = store.largeFileScan {
+                    Text("Showing \(result.entries.count) of \(result.totalFound) files · \(Format.relativeDate(result.date))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if result.isPartial {
+                        Label(result.issues.contains(.timedOut)
+                              ? "The scan timed out. These are partial results; scan again to retry."
+                              : "Some folders could not be read. These results may be incomplete.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if !result.entries.isEmpty {
+                        TextField("Filter by name or path", text: $searchText)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if entries.isEmpty && !store.scanningLargeFiles {
+                        Text(searchText.isEmpty ? "No files over 1 GB found in the scanned folders." : "No files match this filter.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !store.scanningLargeFiles {
+                    Text("Scan to find large files, then reveal them in Finder to review.")
+                        .foregroundStyle(.secondary)
+                }
+                LazyVStack(spacing: 8) {
+                    ForEach(entries) { entry in
+                        revealRow(name: entry.path.hasPrefix(userHome + "/")
+                                  ? "~" + entry.path.dropFirst(userHome.count) : entry.path,
+                                  bytes: entry.bytes, path: entry.path)
+                    }
                 }
             }
         }
@@ -165,7 +212,7 @@ struct CategoryDetailView: View {
     private func revealRow(name: String, bytes: Int64, path: String) -> some View {
         VStack(spacing: 6) {
             HStack {
-                Text(name).lineLimit(1).truncationMode(.middle).font(.callout)
+                Text(name).lineLimit(1).truncationMode(.middle).font(.callout).help(path)
                 Spacer()
                 Text(Format.bytes(bytes)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 Button("Reveal") {
@@ -191,13 +238,15 @@ struct CategoryDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Also thin Time Machine local snapshots", isOn: $includeSnapshots)
                 Button("Review Commands") {
+                    working = true
                     Task {
                         scriptText = await AdminCleaner.systemCleanScript(includeSnapshots: includeSnapshots)
                         showScript = true
+                        working = false
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(working)
+                .disabled(working || !store.canStartOperation)
             }
         }
     }
@@ -222,13 +271,15 @@ struct CategoryDetailView: View {
                     Text("Thinning removes every local snapshot. Time Machine creates new ones on its normal schedule. Needs administrator rights.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Thin Snapshots") {
+                        working = true
                         Task {
                             scriptText = await AdminCleaner.snapshotOnlyScript()
                             showScript = true
+                            working = false
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(working)
+                    .disabled(working || !store.canStartOperation)
                 }
             }
         }
@@ -255,11 +306,11 @@ struct CategoryDetailView: View {
                             }
                         }
                     }
-                    Button("Run Selected Cleanups") {
-                        Task { await store.runDevTools(Array(store.config.enabledDevTools)) }
+                    Button("Review Selected Cleanups…") {
+                        store.requestDevTools()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(store.config.enabledDevTools.isEmpty || store.scanning)
+                    .disabled(store.enabledDevToolIDs.isEmpty || !store.canStartOperation)
                     .padding(.top, 4)
                 }
             }
@@ -289,15 +340,18 @@ struct CategoryDetailView: View {
             HStack {
                 Spacer()
                 Button("Cancel") { showScript = false }
+                    .keyboardShortcut(.cancelAction)
                 Button("Run with Administrator") {
+                    let reviewedScript = scriptText
                     showScript = false
                     Task {
                         working = true
-                        await store.runAdminClean(script: scriptText)
+                        await store.runAdminClean(script: reviewedScript)
                         working = false
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(!store.canStartOperation)
             }
         }
         .padding(18)
@@ -331,10 +385,4 @@ struct CategoryDetailView: View {
         )
     }
 
-    private func runClean(_ entries: [SizedEntry]) async {
-        working = true
-        let items = entries.filter { selectedPaths.contains($0.path) }
-        await store.clean(categoryID: category.id, items: items)
-        working = false
-    }
 }

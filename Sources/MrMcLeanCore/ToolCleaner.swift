@@ -64,6 +64,15 @@ public enum ToolCleaner {
         return found
     }
 
+    public static func cacheBytes(for ids: [String]) async -> Int64 {
+        var total: Int64 = 0
+        for tool in tools where ids.contains(tool.id) {
+            guard let directory = tool.cacheDirectory else { continue }
+            total += await SizeProbe.total(expandTilde(directory)).bytes
+        }
+        return total
+    }
+
     public static func run(_ tool: DevTool, binaryPath: String) async -> Shell.Result {
         var environment = ProcessInfo.processInfo.environment
         let prepend = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"

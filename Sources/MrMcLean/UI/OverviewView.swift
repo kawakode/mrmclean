@@ -18,9 +18,9 @@ struct OverviewView: View {
                     systemDataCard
                 } else {
                     ContentUnavailableView(
-                        "No scan yet",
+                        store.scanning ? "Scanning your disk…" : "No scan yet",
                         systemImage: "externaldrive",
-                        description: Text("Run a scan to see how your disk is used.")
+                        description: Text(store.scanning ? "Category sizes will appear when the scan finishes." : "Run a scan to see how your disk is used.")
                     )
                     .frame(maxWidth: .infinity, minHeight: 320)
                 }
@@ -34,7 +34,7 @@ struct OverviewView: View {
         let disk = snapshot.disk
         let used = disk.usedFraction
         let quick = disk.totalBytes > 0
-            ? Double(snapshot.quickCleanBytes) / Double(disk.totalBytes) : 0
+            ? min(used, Double(snapshot.quickCleanBytes) / Double(disk.totalBytes)) : 0
         return Card {
             HStack(spacing: 24) {
                 ZStack {
@@ -79,7 +79,7 @@ struct OverviewView: View {
                 Button("Full Clean…") { store.requestFullClean() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(store.scanning || store.fullCleanReport != nil)
+                    .disabled(!store.canStartOperation)
             }
         }
     }
@@ -100,12 +100,12 @@ struct OverviewView: View {
                 HStack {
                     Text("Categories").font(.headline)
                     Spacer()
-                    Button("Clean Safe Caches") {
-                        Task { await store.quickClean() }
+                    Button("Clean Caches & Logs…") {
+                        store.requestQuickClean()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .disabled(snapshot.quickCleanBytes == 0 || store.scanning)
+                    .disabled(snapshot.quickCleanBytes == 0 || !store.canStartOperation)
                 }
                 ForEach(snapshot.categories.filter { $0.totalBytes > 0 || $0.itemCount > 0 }) { scan in
                     categoryRow(scan, disk: snapshot.disk)
@@ -117,7 +117,7 @@ struct OverviewView: View {
     private func categoryRow(_ scan: CategoryScan, disk: DiskInfo) -> some View {
         let fraction = disk.totalBytes > 0 ? Double(scan.totalBytes) / Double(disk.totalBytes) : 0
         let categoryConfig = store.config.category(scan.id)
-        let threshold: Double? = categoryConfig.alertEnabled ? categoryConfig.thresholdPercent / 100 : nil
+        let threshold: Double? = store.config.alertsEnabled && categoryConfig.alertEnabled ? categoryConfig.thresholdPercent / 100 : nil
         let over = threshold.map { fraction >= $0 } ?? false
         return Button {
             selection = scan.id
@@ -165,7 +165,7 @@ struct OverviewView: View {
                         .buttonStyle(.borderedProminent)
                     }
                     Button("Rescan") { Task { await store.scan() } }
-                        .disabled(store.scanning)
+                        .disabled(!store.canStartOperation)
                 }
             }
         }
@@ -190,6 +190,9 @@ struct OverviewView: View {
             A folder was too large to finish measuring in the time allowed, so its \
             category may read low. Rescan to try again.
             """)
+        }
+        if issues.contains(.failed) {
+            parts.append("Some folders could not be measured. Rescan to retry; category sizes may be incomplete.")
         }
         return parts.joined(separator: " ")
     }

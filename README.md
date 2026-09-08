@@ -8,17 +8,26 @@ third-party dependencies, targets macOS 14 Sonoma and later.
 - Scans on-disk usage by category: user caches, system caches and logs, app logs,
   Trash, Time Machine local snapshots, Xcode and developer files, dev tool caches,
   Mail downloads, iOS backups, large files.
+- Reviews the selected files or dev-tool commands before each cleanup.
 - Cleans the safe parts of each category. User-level items go straight through an
   allowlist. Root-owned system caches and snapshot thinning run through one
   administrator password prompt, with the exact shell script shown first.
+- **Caches & Logs**: the quick action clears user caches and app logs. Developer
+  archives and the Trash are reviewed separately through their categories or Full Clean.
 - **Full Clean**: one button clears every safe category in a single pass — user
   caches, app logs, Xcode and developer files, the Trash, and (opt-in) the
   enabled dev-tool caches and the root-owned system step. It plays a progress
   animation while it works and ends on a report: space freed, items removed,
-  time taken, and disk free space before and after.
+  time taken, and disk free space before and after. The setup includes the exact
+  administrator script when the system step is selected; failed commands and
+  skipped files stay visible in the report.
+- Large Files: scan on demand, filter by name or path, and reveal results in Finder.
+  Partial scans are marked; the largest 100 files are listed and all matches count
+  toward the total.
+- Choose which detected dev tools participate in Full Clean under Settings › Cleaners.
 - Alerts: enable a per-category threshold as a share of total disk size. When a
   category crosses it, MrMcLean posts a notification. Cooldown and re-alert growth
-  are configurable.
+  are configurable. Background scans continue even when notifications are disabled.
 
 ## First launch
 
@@ -82,6 +91,18 @@ make app VERSION=1.2.3
 `make app` produces a universal binary when full Xcode is present, otherwise a
 binary for the host architecture. `MRMCLEAN_LIVE=1 swift run MrMcLeanTests` also
 runs a real scan and prints the category sizes.
+
+## UI smoke checks
+
+`bash Scripts/ui-smoke.sh settings` opens the actual views with synthetic data and
+in-memory settings. Disk scans and cleanup execution are disabled in this harness.
+Other screens: `overview`, any category ID (for example `userCaches` or
+`largeFiles`), `gate`, `setup`, `review`, `running`, and `report`. Append `--dark`
+for dark appearance. Stop the harness with Ctrl-C.
+
+The normal test runner exercises parsing, allowlists, subprocess failures and
+filesystem regressions using disposable fixtures. It never runs administrator or
+dev-tool cleanup commands. A live scan is read-only.
 
 ## Release pipeline
 

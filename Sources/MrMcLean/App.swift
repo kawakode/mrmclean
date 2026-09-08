@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import MrMcLeanCore
 
+#if !UI_SMOKE
 @main
 struct MrMcLeanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -11,6 +12,7 @@ struct MrMcLeanApp: App {
         Window("MrMcLean", id: "main") {
             RootView()
                 .environment(store)
+                .background(MainWindowIdentity())
                 .frame(minWidth: 860, minHeight: 580)
                 .task { await store.startup() }
         }
@@ -32,6 +34,8 @@ struct MrMcLeanApp: App {
         }
     }
 }
+
+#endif
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set by an explicit Quit before calling `NSApp.terminate` so the launch
@@ -83,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a short while until it materialises.
     @MainActor
     static func presentMainWindow(attemptsLeft: Int = 40) {
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" || ($0.title == "MrMcLean" && !($0 is NSPanel)) }) {
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
@@ -99,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Retries briefly since the window may not exist on the first pass.
     @MainActor
     static func hideMainWindow(attemptsLeft: Int = 20) {
-        if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" || ($0.title == "MrMcLean" && !($0 is NSPanel)) }) {
             window.close()
             return
         }
@@ -122,4 +126,18 @@ enum MainWindow {
 
 extension Notification.Name {
     static let openMainWindow = Notification.Name("MrMcLean.openMainWindow")
+}
+
+/// SwiftUI changes the title as navigation changes. Keep a stable AppKit
+/// identifier so opening the app cannot accidentally bring Settings forward.
+private struct MainWindowIdentity: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { IdentifyingView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class IdentifyingView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.identifier = NSUserInterfaceItemIdentifier("main")
+        }
+    }
 }
