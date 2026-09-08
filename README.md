@@ -47,8 +47,9 @@ by macOS and freed automatically under disk pressure, or needs a restart.
 
 ## Install
 
-Download the DMG or zip from the [Releases](../../releases) page and move
-`MrMcLean.app` to `/Applications`.
+Download the DMG or zip from the [Releases](../../releases) page. Open the DMG
+and drag `MrMcLean.app` onto the **Applications** shortcut to install it. If using
+the zip, extract it and move `MrMcLean.app` to `/Applications`.
 
 The build is **not notarized**, so macOS Gatekeeper blocks it on first launch —
 on recent macOS a double-click does nothing at all. Clear the quarantine flag,

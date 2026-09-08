@@ -48,7 +48,11 @@ codesign --verify --verbose "$APP" || true
 echo "==> Packaging"
 DMG="dist/MrMcLean-$VERSION.dmg"
 ZIP="dist/MrMcLean-$VERSION.zip"
-hdiutil create -quiet -volname "MrMcLean" -srcfolder "$APP" -ov -format UDZO "$DMG"
+DMG_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mrmclean-dmg.XXXXXX")"
+trap 'rm -rf "$DMG_STAGE"' EXIT
+ditto "$APP" "$DMG_STAGE/MrMcLean.app"
+ln -s /Applications "$DMG_STAGE/Applications"
+hdiutil create -quiet -volname "MrMcLean" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
 echo
