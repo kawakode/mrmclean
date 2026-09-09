@@ -20,8 +20,41 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var launchMinimized: Bool = false
     public var hardDeleteNonCache: Bool = false
     public var enabledDevTools: Set<String> = []
+    public var automationEnabled = false
+    public var ruleIntervalMinutes: Double = 5
+    public var fileRules: [FileRule] = []
+    public var lowStorage = LowStorageConfig()
+    public var activityAlerts: [ActivityAlertConfig] = []
+    public var monitoringIntervalSeconds: Double = 60
 
     public init() {}
+
+    // Decode fields individually so adding features preserves every existing setting.
+    private enum CodingKeys: String, CodingKey {
+        case categories, alertsEnabled, scanIntervalHours, cooldownHours, reAlertGrowthPercent
+        case showDockIcon, launchMinimized, hardDeleteNonCache, enabledDevTools
+        case automationEnabled, ruleIntervalMinutes, fileRules, lowStorage, activityAlerts, monitoringIntervalSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        categories = try c.decodeIfPresent([String: CategoryConfig].self, forKey: .categories) ?? categories
+        alertsEnabled = try c.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? alertsEnabled
+        scanIntervalHours = try c.decodeIfPresent(Double.self, forKey: .scanIntervalHours) ?? scanIntervalHours
+        cooldownHours = try c.decodeIfPresent(Double.self, forKey: .cooldownHours) ?? cooldownHours
+        reAlertGrowthPercent = try c.decodeIfPresent(Double.self, forKey: .reAlertGrowthPercent) ?? reAlertGrowthPercent
+        showDockIcon = try c.decodeIfPresent(Bool.self, forKey: .showDockIcon) ?? showDockIcon
+        launchMinimized = try c.decodeIfPresent(Bool.self, forKey: .launchMinimized) ?? launchMinimized
+        hardDeleteNonCache = try c.decodeIfPresent(Bool.self, forKey: .hardDeleteNonCache) ?? hardDeleteNonCache
+        enabledDevTools = try c.decodeIfPresent(Set<String>.self, forKey: .enabledDevTools) ?? enabledDevTools
+        automationEnabled = try c.decodeIfPresent(Bool.self, forKey: .automationEnabled) ?? automationEnabled
+        ruleIntervalMinutes = try c.decodeIfPresent(Double.self, forKey: .ruleIntervalMinutes) ?? ruleIntervalMinutes
+        fileRules = try c.decodeIfPresent([FileRule].self, forKey: .fileRules) ?? fileRules
+        lowStorage = try c.decodeIfPresent(LowStorageConfig.self, forKey: .lowStorage) ?? lowStorage
+        activityAlerts = try c.decodeIfPresent([ActivityAlertConfig].self, forKey: .activityAlerts) ?? activityAlerts
+        monitoringIntervalSeconds = try c.decodeIfPresent(Double.self, forKey: .monitoringIntervalSeconds) ?? monitoringIntervalSeconds
+    }
 
     public func category(_ id: String) -> CategoryConfig {
         categories[id] ?? CategoryConfig()

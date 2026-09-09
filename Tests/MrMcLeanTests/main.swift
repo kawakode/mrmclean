@@ -383,6 +383,8 @@ do {
     h.expect(false, "filesystem regression fixture: \(error)")
 }
 
+await runAutomationTests(h)
+
 // MARK: Optional live scan against the real disk (MRMCLEAN_LIVE=1)
 
 if ProcessInfo.processInfo.environment["MRMCLEAN_LIVE"] == "1" {

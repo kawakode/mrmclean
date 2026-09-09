@@ -13,7 +13,7 @@ struct SettingsView: View {
             AboutSettings()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 470, height: 430)
+        .frame(width: 560, height: 600)
     }
 }
 
@@ -63,15 +63,76 @@ private struct GeneralSettings: View {
     }
 }
 
-private struct AlertSettings: View {
+struct AlertSettings: View {
     @Environment(Store.self) private var store
+    @State private var editingAlert: ActivityAlertConfig?
 
     var body: some View {
         @Bindable var store = store
         Form {
             Section {
-                Toggle("Enable storage alerts", isOn: $store.config.alertsEnabled)
+                Toggle("Enable alerts", isOn: $store.config.alertsEnabled)
+                Text(store.notificationStatus).font(.caption).foregroundStyle(.secondary)
+                Button("Notification Settings…") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) }
+                }
             }
+            Section("Low storage") {
+                Toggle("Alert when available space is low", isOn: $store.config.lowStorage.isEnabled)
+                if store.config.lowStorage.isEnabled {
+                    HStack {
+                        Text("Available space at or below")
+                        Spacer()
+                        TextField("Threshold", value: $store.config.lowStorage.threshold, format: .number)
+                            .labelsHidden().textFieldStyle(.roundedBorder).frame(width: 65)
+                        Picker("Unit", selection: $store.config.lowStorage.unit) {
+                            Text("% of disk").tag(LowStorageConfig.Unit.percent)
+                            Text("GB").tag(LowStorageConfig.Unit.gigabytes)
+                        }.labelsHidden().frame(width: 110)
+                    }
+                    if store.config.lowStorage.threshold <= 0 || (store.config.lowStorage.unit == .percent && store.config.lowStorage.threshold > 100) {
+                        Text("Enter a positive threshold (at most 100 for a percentage).").font(.caption).foregroundStyle(.red)
+                    }
+                    Text("Uses available space including storage macOS can reclaim.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!store.config.alertsEnabled)
+            Section("App file activity") {
+                Text("Watch an app’s logs or output folder for a burst of new files or rapid growth. The folder’s label identifies the app; writers are not detected automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(store.config.activityAlerts) { alert in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Toggle(alert.name, isOn: Binding(
+                                get: { store.config.activityAlerts.first(where: { $0.id == alert.id })?.isEnabled ?? false },
+                                set: { enabled in
+                                    if let index = store.config.activityAlerts.firstIndex(where: { $0.id == alert.id }) {
+                                        store.config.activityAlerts[index].isEnabled = enabled
+                                    }
+                                }))
+                            Spacer()
+                            Button("Edit") { editingAlert = alert }
+                            Button(role: .destructive) { store.config.activityAlerts.removeAll { $0.id == alert.id } } label: {
+                                Image(systemName: "trash")
+                            }.help("Delete activity alert")
+                        }
+                        Text(alert.folder).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        if let status = store.monitorStatus[alert.id] {
+                            Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                    }
+                }
+                Button("Add Activity Alert…") { editingAlert = ActivityAlertConfig() }
+                Picker("Check storage and activity every", selection: $store.config.monitoringIntervalSeconds) {
+                    Text("30 seconds").tag(30.0)
+                    Text("1 minute").tag(60.0)
+                }
+                Button("Check Now") { Task { await store.checkMonitors() } }
+                    .disabled(!store.canStartOperation)
+                Text("Checks run while the app is open. The first check records existing files; later checks detect changes. Files created and removed between checks can be missed.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .disabled(!store.config.alertsEnabled)
             Section("Repeat alerts") {
                 Picker("Silence repeats for", selection: $store.config.cooldownHours) {
                     Text("6 hours").tag(6.0)
@@ -79,7 +140,7 @@ private struct AlertSettings: View {
                     Text("24 hours").tag(24.0)
                     Text("3 days").tag(72.0)
                 }
-                Picker("Re-alert if it grows by", selection: $store.config.reAlertGrowthPercent) {
+                Picker("Category re-alert if it grows by", selection: $store.config.reAlertGrowthPercent) {
                     Text("2%").tag(2.0)
                     Text("5%").tag(5.0)
                     Text("10%").tag(10.0)
@@ -94,6 +155,8 @@ private struct AlertSettings: View {
             .disabled(!store.config.alertsEnabled)
         }
         .formStyle(.grouped)
+        .task { store.notificationStatus = await NotificationsController.shared.authorizationDescription() }
+        .sheet(item: $editingAlert) { alert in ActivityAlertEditor(alert: alert).environment(store) }
     }
 
     private func thresholdRow(_ category: StorageCategory) -> some View {
@@ -171,11 +234,11 @@ private struct AboutSettings: View {
         Form {
             Section {
                 Text("MrMcLean \(version)").font(.headline)
-                Text("A minimal storage cleaner with per-category size alerts. No third-party dependencies.")
+                Text("A storage cleaner with automatic file rules and configurable storage and file-activity alerts. No third-party dependencies.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Safety") {
-                Text("Every user-level deletion is checked against an allowlist. System paths, Documents, Desktop, Downloads, Photos and iCloud Drive are always rejected. The administrator step shows its exact script before running.")
+                Text("Cleanup uses a strict deletion allowlist. File Rules only manage explicitly selected folders and never replace existing files or permanently delete them. The administrator cleanup step shows its exact script before running.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

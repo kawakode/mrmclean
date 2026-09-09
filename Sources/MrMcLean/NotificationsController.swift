@@ -21,14 +21,30 @@ final class NotificationsController: NSObject, UNUserNotificationCenterDelegate 
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func post(title: String, body: String) {
-        guard ready else { return }
+    func authorizationDescription() async -> String {
+        guard ready else { return "Notifications are available when running the app bundle." }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional: return "Notifications are allowed in macOS."
+        case .denied: return "Notifications are blocked. Allow MrMcLean in System Settings → Notifications."
+        default: return "Allow notifications in macOS to receive alerts."
+        }
+    }
+
+    func post(title: String, body: String) async -> Bool {
+        guard ready else { return false }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return false }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.categoryIdentifier = categoryID
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        do {
+            try await center.add(request)
+            return true
+        } catch { return false }
     }
 
     nonisolated func userNotificationCenter(

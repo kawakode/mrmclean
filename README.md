@@ -1,6 +1,6 @@
 # MrMcLean
 
-A small macOS storage cleaner with per-category size alerts. Native SwiftUI, no
+A small macOS storage cleaner with automatic file rules and configurable alerts. Native SwiftUI, no
 third-party dependencies, targets macOS 14 Sonoma and later.
 
 ## What it does
@@ -28,6 +28,81 @@ third-party dependencies, targets macOS 14 Sonoma and later.
 - Alerts: enable a per-category threshold as a share of total disk size. When a
   category crosses it, MrMcLean posts a notification. Cooldown and re-alert growth
   are configurable. Background scans continue even when notifications are disabled.
+- File Rules: match metadata in selected folders, then move files into folders,
+  add Finder tags, rename them using templates, or move them to the Trash.
+- Low-storage alerts: notify when available space falls to a configured percentage
+  or number of GB.
+- App file-activity alerts: watch an app's logs or output folder for too many new
+  files or too much added data within a configurable time window.
+
+## Automatic file management
+
+Open **File Rules** in the sidebar and add a rule. Choose a source folder, whether
+to include subfolders, and whether all or any conditions must match. Conditions
+support file names, extensions, kinds (image, audio, video, document, archive,
+other), size in decimal MB, creation/modification/access age in days, and Finder
+tags. Text comparisons ignore case. Last accessed uses filesystem access time;
+files without an access date do not match that condition.
+
+Actions run in the order shown. Add a Finder tag without removing existing tags,
+rename a file, or move it into a selected folder with optional date/extension
+subfolders. A Trash action must be the rule's only action. Filename and subfolder
+templates support `{name}` (without extension), `{ext}`, `{year}`, `{month}`,
+`{day}`, `{created}` and `{modified}`. Dates use the file's creation date, except
+`{modified}`; full dates are `yyyy-MM-dd`. For example, rename to
+`{created}-{name}.{ext}` or arrange files under `{ext}/{year}/{month}`.
+
+**Preview** lists the proposed actions and skipped files without changing anything.
+Enable the rule and the main automatic-rules switch to authorize scheduled changes.
+Choose a 1, 5, 15 or 60 minute interval, or use **Run Enabled Rules Now**. Rules run
+while MrMcLean is open, including with its main window closed. They wait while
+another scan or cleanup is running. Rules are disabled by default.
+Turning off the main switch pauses a running batch after the current file finishes.
+
+Rules run in displayed order and handle a file at most once per pass. Persistent
+history prevents the same file from being processed again by the same rule version,
+including after restarting the app. Editing a rule's conditions, folder or actions
+allows another run; simply renaming or toggling a rule does not. Recent Activity
+shows completed, interrupted and failed actions. Interrupted or partially failed
+sequences are not automatically retried; inspect the file before changing the rule.
+
+Rules can manage specific folders in your home directory or on an external volume.
+Within Library, only Logs and Caches can be modified. Moves must stay on one volume
+so file identity survives; moving between volumes is reported as a skipped action.
+Existing destinations are never replaced. Hidden files/folders, symbolic and hard
+links, packages, incomplete downloads (`.download`, `.crdownload`, `.part`, `.tmp`)
+and files modified in the last 30 seconds are skipped. Scans stop after 20,000
+entries or 15 seconds; an incomplete scan performs no actions and reports why.
+History must be saved successfully before a file can be changed.
+
+## Configuring alerts
+
+Under **Settings → Alerts**, enable alerts and choose a low-space threshold, add
+activity alerts, or keep using the category thresholds. Low-space checks use
+available capacity including purgeable space that macOS can reclaim. Low-space and
+activity checks run every 30 or 60 seconds independently of the slower category
+scans. macOS notification permission is required; the pane displays its status.
+Notification cooldowns advance only after macOS accepts a notification request.
+
+For an activity alert, choose a specific app's logs or output folder and give it an
+app/folder label. Set a rolling window of 1–60 minutes and thresholds for new-file
+count, added MB, or both; either threshold can trigger the alert. Added data includes
+growth of existing files, so one rapidly growing log also triggers a warning.
+Deleting other files does not cancel this growth. The shared cooldown limits
+repeated notifications; the growth override applies only to category-size alerts.
+
+Activity monitoring observes folders, not processes: all writers in a chosen folder
+contribute to its alert. Unlike modification rules, these read-only monitors can
+also watch specific folders in Application Support or app containers. The first
+successful check establishes a baseline; restarting, changing settings, an incomplete
+scan or a long sleep starts a new baseline without treating existing files as new.
+Counts are sampled, so files created and removed between checks can be missed, and
+window boundaries are approximate to the check interval. Checks pause during other
+disk operations and stop when the app quits.
+
+Existing settings are preserved when upgrading. Rules and alert preferences live in
+`~/Library/Application Support/MrMcLean/config.json`; execution receipts live beside
+them in `rule-history.jsonl`. Removing that history allows rules to process files again.
 
 ## First launch
 
@@ -98,8 +173,14 @@ runs a real scan and prints the category sizes.
 `bash Scripts/ui-smoke.sh settings` opens the actual views with synthetic data and
 in-memory settings. Disk scans and cleanup execution are disabled in this harness.
 Other screens: `overview`, any category ID (for example `userCaches` or
-`largeFiles`), `gate`, `setup`, `review`, `running`, and `report`. Append `--dark`
-for dark appearance. Stop the harness with Ctrl-C.
+`largeFiles`), `gate`, `setup`, `review`, `running`, `report`, `fileRules`,
+`ruleEditor`, `rulePreview`, `alerts`, and `activityEditor`. Append `--dark`
+for dark appearance. Append `--snapshot /tmp/screen.png` to capture the app view
+and exit automatically, or stop the interactive harness with Ctrl-C.
+
+`bash Scripts/ui-smoke.sh automationChecks` exercises background scheduling,
+enabled/disabled rules, busy/access guards, and activity status with disposable
+temporary files. It does not start real scans or send notifications.
 
 The normal test runner exercises parsing, allowlists, subprocess failures and
 filesystem regressions using disposable fixtures. It never runs administrator or
@@ -116,10 +197,12 @@ input. No secrets required.
 
 ## Safety
 
-- Every user-level deletion is checked against an allowlist. Paths under `/System`,
+- Every user-level cleanup deletion is checked against an allowlist. Paths under `/System`,
   Documents, Desktop, Downloads, Photos, iCloud Drive, and the Mail message store
   are always rejected.
-- Cleaning is dry-run first. Nothing is removed without an explicit confirm.
+- Cleaning is dry-run first and requires explicit confirmation. Separately, enabling
+  File Rules authorizes their automatic actions inside the selected folders; rules
+  only move files to Trash and never permanently delete them.
 - The administrator step writes its script to a temp file, shows it verbatim, and
   runs it once. It contains no network calls and no deletion outside the printed list.
 

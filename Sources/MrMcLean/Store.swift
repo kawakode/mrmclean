@@ -21,6 +21,13 @@ final class Store {
             if config.scanIntervalHours != oldValue.scanIntervalHours {
                 AlertMonitor.shared.reschedule()
             }
+            if !config.automationEnabled && oldValue.automationEnabled { activeRuleTask?.cancel() }
+            if config.alertsEnabled != oldValue.alertsEnabled
+                || config.activityAlerts.map(\.monitoringConfig) != oldValue.activityAlerts.map(\.monitoringConfig) {
+                activityTrackers = [:]
+                monitorStatus = [:]
+                lastMonitoringCheck = nil
+            }
         }
     }
     var snapshot: ScanSnapshot?
@@ -32,9 +39,21 @@ final class Store {
     var largeFiles: [SizedEntry] { largeFileScan?.entries ?? [] }
     var cleaning = false
     var cleanupRequest: CleanupRequest?
-    var isBusy: Bool { scanning || scanningLargeFiles || cleaning || fullCleanRunning }
+    var isBusy: Bool { scanning || scanningLargeFiles || cleaning || fullCleanRunning || managingFiles }
     var canStartOperation: Bool { !isBusy && !showAccessGate && fullCleanReport == nil }
     var scanningLargeFiles = false
+    var managingFiles = false
+    var recentRuleActivity: [RuleReceipt] = []
+    var ruleHistoryProblem: String?
+    var lastRuleRun: Date?
+    var ruleRunSummary = "Rules have not run this session."
+    var monitorStatus: [UUID: String] = [:]
+    var notificationStatus = ""
+
+    @ObservationIgnored var ruleJournal = RuleJournal()
+    @ObservationIgnored var activityTrackers: [UUID: ActivityTracker] = [:]
+    @ObservationIgnored var lastMonitoringCheck: Date?
+    @ObservationIgnored var activeRuleTask: Task<(RuleRunResult, RuleJournal), Never>?
 
     /// Full Disk Access state, refreshed while the onboarding gate is on screen.
     var fullDiskAccess: FullDiskAccessStatus
@@ -52,8 +71,8 @@ final class Store {
 
     @ObservationIgnored private var ready = false
     @ObservationIgnored private var started = false
-    @ObservationIgnored private let persistConfig: Bool
-    @ObservationIgnored private let diskOperationsEnabled: Bool
+    @ObservationIgnored let persistConfig: Bool
+    @ObservationIgnored let diskOperationsEnabled: Bool
 
     /// True until the user grants access or explicitly continues without it.
     /// `.unknown` (no probe file to test) does not block.
@@ -69,6 +88,12 @@ final class Store {
         self.fullDiskAccess = fullDiskAccess
         self.persistConfig = persistConfig
         self.diskOperationsEnabled = diskOperationsEnabled
+        if persistConfig {
+            do {
+                ruleJournal = try RuleJournal.load()
+                recentRuleActivity = Array(ruleJournal.receipts.suffix(50).reversed())
+            } catch { ruleHistoryProblem = "Execution history could not be loaded. Rules are paused: \(error.localizedDescription)" }
+        }
         ready = true
     }
 
@@ -81,7 +106,8 @@ final class Store {
         AlertMonitor.shared.bind(self)
         AlertMonitor.shared.reschedule()
         applyActivationPolicy()
-        if snapshot == nil { Task { await scan() } }
+        if snapshot == nil { await scan() }
+        AutomationMonitor.shared.bind(self)
     }
 
     func applyActivationPolicy() {
@@ -134,7 +160,7 @@ final class Store {
         progress = 1
         applyActivationPolicy()
         statusText = ""
-        if !cleaning && !fullCleanRunning { evaluateAlerts() }
+        if !cleaning && !fullCleanRunning { await evaluateAlerts() }
     }
 
     func scanLargeFiles() async {
@@ -268,7 +294,7 @@ final class Store {
         report.finishedAt = Date()
         fullCleanReport = report
         fullCleanRunning = false
-        evaluateAlerts()
+        await evaluateAlerts()
     }
 
     private func runUserCategoryPhase(_ id: String, entries: [SizedEntry], into report: inout FullCleanReport, stepID: String) async {
@@ -381,30 +407,26 @@ final class Store {
 
     // MARK: Alerts
 
-    func evaluateAlerts() {
+    func evaluateAlerts() async {
         guard let snapshot else { return }
-        var updated = config
-        var changed = false
         for scan in snapshot.categories where scan.category.supportsAlerts {
-            let categoryConfig = updated.category(scan.id)
+            let categoryConfig = config.category(scan.id)
             let evaluation = AlertLogic.evaluate(
                 sizeBytes: scan.totalBytes,
                 diskBytes: snapshot.disk.totalBytes,
                 category: categoryConfig,
-                global: updated
+                global: config
             )
             guard evaluation.shouldNotify else { continue }
-            NotificationsController.shared.post(
+            let sent = await NotificationsController.shared.post(
                 title: "\(scan.category.name) is large",
                 body: "\(Format.bytes(scan.totalBytes)) is \(Format.percent(evaluation.fraction, digits: 1)) of this disk."
             )
-            var categoryUpdated = categoryConfig
-            categoryUpdated.lastAlertDate = Date()
-            categoryUpdated.lastAlertBytes = scan.totalBytes
-            updated.categories[scan.id] = categoryUpdated
-            changed = true
+            if sent, config.category(scan.id) == categoryConfig {
+                config.categories[scan.id, default: CategoryConfig()].lastAlertDate = Date()
+                config.categories[scan.id, default: CategoryConfig()].lastAlertBytes = scan.totalBytes
+            }
         }
-        if changed { config = updated }
     }
 
     func binding(for id: String) -> Binding<CategoryConfig> {

@@ -70,6 +70,9 @@ struct RootView: View {
                 NavigationLink(value: "overview") {
                     Label("Overview", systemImage: "chart.pie")
                 }
+                NavigationLink(value: "fileRules") {
+                    Label("File Rules", systemImage: "folder.badge.gearshape")
+                }
                 Section("Storage") {
                     ForEach(Catalog.all) { category in
                         NavigationLink(value: category.id) {
@@ -104,6 +107,8 @@ struct RootView: View {
     @ViewBuilder
     private var detail: some View {
         switch selection {
+        case "fileRules":
+            FileRulesView()
         case .some(let id) where id != "overview":
             if let category = Catalog.category(id) {
                 CategoryDetailView(category: category).id(category.id)
